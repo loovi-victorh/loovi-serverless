@@ -1,0 +1,153 @@
+[
+  {
+    "headers": {
+      "x-forwarded-for": "44.221.62.40, 15.158.41.241",
+      "x-forwarded-proto": "https",
+      "x-forwarded-port": "443",
+      "host": "n8n.loovi.com.br",
+      "x-amzn-trace-id": "Root=1-68000265-627cc09a761328715d0521a7",
+      "content-length": "2419",
+      "accept": "application/json, text/plain, */*",
+      "content-type": "application/json",
+      "x-event-name": "Message.Send",
+      "user-agent": "axios/1.6.7",
+      "via": "1.1 f1dd5bd4f4b31b158b9e826b6e013cda.cloudfront.net (CloudFront)",
+      "x-amz-cf-id": "PCW9nTAOsrBl_rsmVPAnRhsj9hNBJF9UkfYypszuHaSQoFsSnPG_8g==",
+      "x-gallabox-key": "mdwjDjdfw4#945*&%kdc",
+      "accept-encoding": "gzip, compress, deflate, br"
+    },
+    "params": {},
+    "query": {},
+    "body": {
+      "id": "680002641730b3b4aa2a90b9",
+      "accountId": "67af9a1e292376becc59c4ce",
+      "channelId": "67afabb93a1de2643d4078e1",
+      "channelType": "whatsapp",
+      "localMessageId": "d8834cfd-7416-47a3-8e14-568123e7c194",
+      "contactId": "680002641730b3b4aa2a90b1",
+      "sender": "67af9a1e292376becc59c4cc",
+      "whatsapp": {
+        "id": "0164532c-ff59-43ea-bb82-b44a7b1e19a7",
+        "to": "5519989110359",
+        "time": "2025-04-16T19:17:56.781Z",
+        "status": "queued",
+        "statusTime": "2025-04-16T19:17:57.050Z",
+        "type": "template",
+        "template": {
+          "templateId": "67f83bfb2923498c20f4ada1",
+          "body": "Oi Willian! Recebi a sua cotação, agora falta pouco para finalizar seu seguro. Clique no botão abaixo para continuar ou me chama se precisar de ajuda.",
+          "header": {
+            "type": "text",
+            "text": {
+              "body": "Aqui é a Lia da Loovi!"
+            }
+          },
+          "buttons": [
+            {
+              "type": "url",
+              "text": "Quero continuar",
+              "url": "https://loovi.com.br/checkout/{{quotationId}}"
+            },
+            {
+              "type": "quick_reply",
+              "text": "Preciso de ajuda"
+            }
+          ],
+          "bodyValues": {},
+          "buttonValues": [
+            {
+              "index": 0,
+              "sub_type": "url",
+              "parameters": {
+                "type": "text",
+                "text": "LV5C5D6AFCB8E5471BBED29015FF4B2F8D?utm_source=wpplia&utm_medium=rec_2"
+              }
+            }
+          ],
+          "variableValues": {
+            "bodyValues": [
+              {}
+            ],
+            "buttonValues": [
+              {
+                "index": 0,
+                "sub_type": "url",
+                "parameters": {
+                  "type": "text",
+                  "text": "LV5C5D6AFCB8E5471BBED29015FF4B2F8D?utm_source=wpplia&utm_medium=rec_2"
+                }
+              }
+            ]
+          },
+          "template": {
+            "accountId": "67af9a1e292376becc59c4ce",
+            "channelId": "67afabb93a1de2643d4078e1",
+            "creatorId": "67af9a1e292376becc59c4cc",
+            "status": "approved",
+            "isSystemTemplate": false,
+            "enableURLTracking": true,
+            "name": "quotation_received_a",
+            "language": "pt_BR",
+            "category": "UTILITY",
+            "components": [
+              {
+                "type": "HEADER",
+                "format": "TEXT",
+                "text": "Aqui é a Lia da Loovi!"
+              },
+              {
+                "type": "BODY",
+                "text": "Oi {{name}}! Recebi a sua cotação, agora falta pouco para finalizar seu seguro. Clique no botão abaixo para continuar ou me chama se precisar de ajuda.",
+                "example": {
+                  "body_text": [
+                    [
+                      "Victor"
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "BUTTONS",
+                "buttons": [
+                  {
+                    "type": "URL",
+                    "text": "Quero continuar",
+                    "url": "https://loovi.com.br/checkout/{{quotationId}}",
+                    "supported_apps": []
+                  },
+                  {
+                    "type": "QUICK_REPLY",
+                    "text": "Preciso de ajuda",
+                    "supported_apps": []
+                  }
+                ]
+              }
+            ],
+            "allow_category_change": false,
+            "createdAt": "2025-04-10T21:45:31.547Z",
+            "updatedAt": "2025-04-16T12:01:41.579Z",
+            "statusUpdatedAt": "2025-04-10T21:46:21.367Z",
+            "whatsappTemplateId": "1874226326450547",
+            "quality_score": {
+              "score": "UNKNOWN",
+              "reasons": []
+            },
+            "id": "67f83bfb2923498c20f4ada1"
+          }
+        },
+        "retryable": false,
+        "statusLog": [
+          {
+            "status": "queued",
+            "date": "2025-04-16T19:17:57.050Z"
+          }
+        ]
+      },
+      "contact": {
+        "name": ""
+      }
+    },
+    "webhookUrl": "https://n8n.loovi.com.br/webhook-test/ccaeaea4-1997-4971-b07f-704daa089c4b",
+    "executionMode": "test"
+  }
+]

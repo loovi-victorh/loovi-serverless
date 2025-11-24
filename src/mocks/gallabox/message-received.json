@@ -1,0 +1,50 @@
+[
+  {
+    "headers": {
+      "x-forwarded-for": "34.227.16.65, 15.158.41.241",
+      "x-forwarded-proto": "https",
+      "x-forwarded-port": "443",
+      "host": "n8n.loovi.com.br",
+      "x-amzn-trace-id": "Root=1-67fff80c-15303dc85f09c279306ec2d8",
+      "content-length": "666",
+      "accept": "application/json, text/plain, */*",
+      "content-type": "application/json",
+      "x-gallabox-signature": "yRqqy+8GHeFBu1uegHs7q73WslhYmaofUen7xtiVaik=",
+      "user-agent": "axios/1.6.7",
+      "via": "1.1 2db4851b6d360f79d8bbeb4eae3c9eb6.cloudfront.net (CloudFront)",
+      "x-amz-cf-id": "X-07mZy4BTDURnJXKVDctp38WOV9SNVcGUVdq4YOFJjqJ0af7jfLlw==",
+      "x-event-name": "Message.Received",
+      "accept-encoding": "gzip, compress, deflate, br"
+    },
+    "params": {},
+    "query": {},
+    "body": {
+      "id": "67fff80cb8684f0580f7f66d",
+      "conversationId": "67fff6c0c1b923583ded8900",
+      "accountId": "67af9a1e292376becc59c4ce",
+      "channelId": "67afabb93a1de2643d4078e1",
+      "channelType": "whatsapp",
+      "localMessageId": "cb4c068e-a53a-40b4-a163-aa3dd6aee6fb",
+      "contactId": "67fff6c0c1b923583ded88ec",
+      "sender": "67fff6c0c1b923583ded88ec",
+      "whatsapp": {
+        "id": "wamid.HBgMNTU0Mjg0Mjc0Mzc2FQIAEhggMTg0MDRGMEZGQjFFQ0RBNkU3NUNBNjEwNTkxQkJDQkIA",
+        "from": "554284274376",
+        "time": "2025-04-16T18:33:46.000Z",
+        "status": "received",
+        "statusTime": "2025-04-16T18:33:46.000Z",
+        "type": "text",
+        "text": {
+          "body": "Rft1g86"
+        }
+      },
+      "contact": {
+        "id": "67fff6c0c1b923583ded88ec",
+        "name": "leandrogicorski"
+      },
+      "channelNumber": "553193459793"
+    },
+    "webhookUrl": "https://n8n.loovi.com.br/webhook-test/ccaeaea4-1997-4971-b07f-704daa089c4b",
+    "executionMode": "test"
+  }
+]

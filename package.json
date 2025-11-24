@@ -1,0 +1,41 @@
+{
+  "name": "loovi-serverless",
+  "version": "1.0.0",
+  "description": "<!-- title: 'AWS Node Scheduled Cron example in NodeJS' description: 'This is an example of creating a function that runs as a cron job using the serverless ''schedule'' event.' layout: Doc framework: v4 platform: AWS language: nodeJS priority: 1 authorLink: 'https://github.com/0dj0bz' authorName: 'Rob Abbott' authorAvatar: 'https://avatars3.githubusercontent.com/u/5679763?v=4&s=140' -->",
+  "main": "handler.js",
+  "scripts": {
+    "deploy": "serverless deploy --stage dev",
+    "deploy:prd": "serverless deploy --stage prd",
+    "offline": "serverless offline start --stage dev",
+    "offline:prd": "serverless offline start --stage prd",
+    "package": "serverless package --stage dev",
+    "supabase:gen": "supabase gen types typescript --project-id cibgvzosquflnscharso > database.types.ts"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@aws-sdk/client-sqs": "^3.782.0",
+    "@eslint/js": "^9.24.0",
+    "@serverless/typescript": "^4.11.1",
+    "@types/aws-lambda": "^8.10.148",
+    "@types/serverless": "^3.12.27",
+    "dotenv": "^16.4.7",
+    "eslint": "^9.24.0",
+    "eslint-config-prettier": "^10.1.1",
+    "globals": "^16.0.0",
+    "prettier": "^3.5.3",
+    "serverless": "^4.12.0",
+    "serverless-offline": "^14.4.0",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.29.1"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.58.0",
+    "googleapis": "^148.0.0",
+    "ioredis": "^5.6.0",
+    "node-fetch": "^3.3.2"
+  },
+  "packageManager": "pnpm@10.17.1+sha512.17c560fca4867ae9473a3899ad84a88334914f379be46d455cbf92e5cf4b39d34985d452d2583baf19967fa76cb5c17bc9e245529d0b98745721aa7200ecaf7a"
+}
