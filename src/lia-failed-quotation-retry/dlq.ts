@@ -30,11 +30,8 @@ export async function run(event: SQSEvent, context: any) {
       method: "POST",
       body: JSON.stringify({
         writeKey: segmentApiKey,
-        event: "dlq_quotation_recovery_error",
-        userId: ev.detail.userId,
-        properties: {
-          quotation_id: ev.detail.properties.quotation_id,
-        },
+        event: "dlq_quotation_retry_failed",
+        anonymousId: ev.detail.anonymousId || crypto.randomUUID(),
       }),
     });
   }

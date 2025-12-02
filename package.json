@@ -18,8 +18,10 @@
     "@eslint/js": "^9.24.0",
     "@serverless/typescript": "^4.11.1",
     "@types/aws-lambda": "^8.10.148",
+    "@types/pg": "^8.15.6",
     "@types/serverless": "^3.12.27",
     "dotenv": "^16.4.7",
+    "drizzle-kit": "^0.31.7",
     "eslint": "^9.24.0",
     "eslint-config-prettier": "^10.1.1",
     "globals": "^16.0.0",
@@ -32,10 +34,13 @@
     "typescript-eslint": "^8.29.1"
   },
   "dependencies": {
+    "@aws-sdk/client-ses": "^3.940.0",
     "@supabase/supabase-js": "^2.58.0",
+    "drizzle-orm": "^0.44.7",
     "googleapis": "^148.0.0",
     "ioredis": "^5.6.0",
-    "node-fetch": "^3.3.2"
+    "node-fetch": "^3.3.2",
+    "pg": "^8.16.3"
   },
   "packageManager": "pnpm@10.17.1+sha512.17c560fca4867ae9473a3899ad84a88334914f379be46d455cbf92e5cf4b39d34985d452d2583baf19967fa76cb5c17bc9e245529d0b98745721aa7200ecaf7a"
 }

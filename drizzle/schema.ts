@@ -1,0 +1,988 @@
+import {
+  pgTable,
+  pgView,
+  timestamp,
+  text,
+  bigint,
+  boolean,
+  pgMaterializedView,
+  date,
+  numeric,
+  integer,
+  interval,
+  varchar,
+} from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+
+export const iaFlowErrors = pgView("ia_flow_errors", {
+  receivedAt: timestamp("received_at", { withTimezone: true, mode: "string" }),
+  where: text("_where"),
+  error: text(),
+  flow: text(),
+  threadId: text("thread_id"),
+  phone: text(),
+}).as(
+  sql`SELECT received_at, _where, error, flow, thread_id, phone FROM lia_analytics_prd.flow_error WHERE length(phone) <= 15 ORDER BY received_at DESC`
+);
+
+export const purchasesPageviews = pgView("purchases_pageviews", {
+  anonId: text("anon_id"),
+  pageviewDate: timestamp("pageview_date", { mode: "string" }),
+  userId: text("user_id"),
+  purchaseDate: timestamp("purchase_date", { mode: "string" }),
+  quotationId: text("quotation_id"),
+  coupon: text(),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  sellerId: bigint("seller_id", { mode: "number" }),
+  utmSource: text("utm_source"),
+  utmMedium: text("utm_medium"),
+  utmContent: text("utm_content"),
+  campaignName: text("campaign_name"),
+  adName: text("ad_name"),
+  pageUrl: text("page_url"),
+  pagePath: text("page_path"),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  pageviewOrder: bigint("pageview_order", { mode: "number" }),
+}).as(
+  sql`WITH user_anonymous_mapping AS ( SELECT DISTINCT pages.user_id, pages.anonymous_id FROM js_aquisicao_prd.pages WHERE pages.user_id IS NOT NULL AND (pages.received_at AT TIME ZONE 'America/Sao_Paulo'::text) > ((now() AT TIME ZONE 'America/Sao_Paulo'::text) - '90 days'::interval) ), purchases AS ( SELECT p_1.user_id, uam.anonymous_id, (p_1.received_at AT TIME ZONE 'America/Sao_Paulo'::text) AS purchase_date, p_1.quotation_id, p_1.coupon, p_1.seller_id FROM api_sap_prd.purchased p_1 LEFT JOIN user_anonymous_mapping uam ON p_1.user_id = uam.user_id WHERE (p_1.received_at AT TIME ZONE 'America/Sao_Paulo'::text) > ((now() AT TIME ZONE 'America/Sao_Paulo'::text) - '90 days'::interval) ), purchases_with_pageviews AS ( SELECT pv.anonymous_id AS anon_id, (pv.received_at AT TIME ZONE 'America/Sao_Paulo'::text) AS pageview_date, p_1.user_id, p_1.anonymous_id, p_1.purchase_date, p_1.quotation_id, p_1.coupon, p_1.seller_id, pv.context_campaign_source AS utm_source, pv.context_campaign_medium AS utm_medium, pv.context_campaign_content AS utm_content, pv.context_campaign_name AS campaign_name, pv.context_page_url AS page_url, pv.path AS page_path, (regexp_match(pv.context_campaign_name, '.+\|.+\|(.+)'::text))[1] AS ad_name FROM js_aquisicao_prd.pages pv JOIN purchases p_1 ON pv.anonymous_id = p_1.anonymous_id WHERE (pv.received_at AT TIME ZONE 'America/Sao_Paulo'::text) > ((now() AT TIME ZONE 'America/Sao_Paulo'::text) - '90 days'::interval) ) SELECT anon_id, pageview_date, user_id, purchase_date, quotation_id, coupon, seller_id, utm_source, utm_medium, utm_content, campaign_name, ad_name, page_url, page_path, row_number() OVER (PARTITION BY anon_id ORDER BY pageview_date) AS pageview_order FROM purchases_with_pageviews p ORDER BY anon_id, pageview_date`
+);
+
+export const paymentSucceeded = pgView("payment_succeeded", {
+  receivedAt: timestamp("received_at", { mode: "string" }),
+  userId: text("user_id"),
+  email: text(),
+  sellerType: text("seller_type"),
+  purchased: boolean(),
+}).as(
+  sql`WITH pay_info_add AS ( SELECT max(pi_1.received_at) AS received_at, pi_1.user_id, lower(pi_1.context_traits_email) AS email FROM js_aquisicao_prd.payment_info_added pi_1 WHERE pi_1.context_traits_email IS NOT NULL AND pi_1.user_id IS NOT NULL AND date(pi_1.received_at) < date(now()) AND date(pi_1.received_at) >= date(now() - '15 days'::interval) GROUP BY pi_1.user_id, pi_1.context_traits_email ORDER BY (max(pi_1.received_at)) DESC ), purchases AS ( SELECT max(p_1.received_at) AS received_at, lower(p_1.context_traits_email) AS email, p_1.user_id, max(p_1.seller_type) AS seller_type FROM js_aquisicao_prd.purchased p_1 WHERE p_1.context_traits_email IS NOT NULL AND p_1.user_id IS NOT NULL GROUP BY p_1.user_id, p_1.context_traits_email ) SELECT (pi.received_at AT TIME ZONE 'America/Sao_Paulo'::text) AS received_at, pi.user_id, pi.email, p.seller_type, CASE WHEN p.seller_type IS NOT NULL THEN true ELSE false END AS purchased FROM pay_info_add pi LEFT JOIN purchases p ON pi.email = p.email ORDER BY pi.received_at DESC`
+);
+
+export const leadsBlackfriday2025Distinct = pgMaterializedView(
+  "leads_blackfriday_2025_distinct",
+  {
+    phone: text("Phone"),
+    name: text(),
+    quotationId: text("quotation_id"),
+    monthYear: text("month_year"),
+    // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+    rn: bigint({ mode: "number" }),
+  }
+).as(
+  sql`SELECT "Name", "Phone", name, quotation_id, month_year, rn FROM ( SELECT b1."Name", b1."Phone", b1.name, b1.quotation_id, b1.month_year, row_number() OVER (PARTITION BY b1."Phone" ORDER BY b1.month_year DESC) AS rn FROM leads_blackfriday_2025 b1) unnamed_subquery WHERE rn = 1`
+);
+
+export const metaConnectRate = pgMaterializedView("meta_connect_rate", {
+  dateStart: date("date_start"),
+  linkClicks: numeric("link_clicks"),
+  metaPageviews: numeric("meta_pageviews"),
+}).as(
+  sql`WITH day_clicks_1 AS ( SELECT date(i.date_start) AS date_start, sum(i.link_clicks) AS link_clicks FROM facebook_ads_1.insights i WHERE i.link_clicks > 0::numeric AND i.date_start >= '2025-01-01 00:00:00+00'::timestamp with time zone GROUP BY (date(i.date_start)) ORDER BY (date(i.date_start)) DESC, (sum(i.link_clicks)) DESC ), day_clicks_2 AS ( SELECT date(i.date_start) AS date_start, sum(i.link_clicks) AS link_clicks FROM facebook_ads_2.insights i WHERE i.link_clicks > 0::numeric AND i.date_start >= '2025-01-01 00:00:00+00'::timestamp with time zone GROUP BY (date(i.date_start)) ORDER BY (date(i.date_start)) DESC, (sum(i.link_clicks)) DESC ), meta_pageviews AS ( SELECT meta_pageviews_1to1.received_at, sum(meta_pageviews_1to1.count) AS meta_pageviews FROM meta_pageviews_1to1 GROUP BY meta_pageviews_1to1.received_at ), sum_link_clicks AS ( SELECT d.date_start, sum(d.link_clicks) AS link_clicks, sum(d2.link_clicks) AS link_clicks_2 FROM day_clicks_1 d JOIN day_clicks_2 d2 ON d.date_start = d2.date_start GROUP BY d.date_start ORDER BY d.date_start DESC ) SELECT s.date_start, sum(s.link_clicks + s.link_clicks_2) AS link_clicks, sum(m.meta_pageviews) AS meta_pageviews FROM sum_link_clicks s JOIN meta_pageviews m ON m.received_at = s.date_start GROUP BY s.date_start ORDER BY s.date_start DESC`
+);
+
+export const iaQuotationGenErrorWithError = pgView(
+  "ia_quotation_gen_error_with_error",
+  {
+    receivedAt: timestamp("received_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    additionalGlass: boolean("additional_glass"),
+    coupon: text(),
+    cep: text(),
+    userId: text("user_id"),
+    additionalCollision: boolean("additional_collision"),
+    isServiceVehicle: boolean("is_service_vehicle"),
+    fipe: text(),
+    vehicleType: text("vehicle_type"),
+    error: text(),
+    phone: text(),
+  }
+).as(
+  sql`SELECT g.received_at, g.additional_glass, CASE WHEN g.coupon ~ similar_to_escape('[0-9]{1}[A-Z0-9]{3}'::text) OR g.coupon ~ similar_to_escape('[A-Z]{1}[0-9]{1}[A-Z0-9]{2}'::text) THEN 'INDICACAO'::text ELSE (regexp_match(g.coupon, '(.+)_.+'::text))[1] END AS coupon, g.cep, g.user_id, g.additional_collision, g.is_service_vehicle, g.fipe, g.vehicle_type, g.error, i.phone FROM lia_analytics_prd.generate_quotation_error g LEFT JOIN lia_analytics_prd.identifies i ON g.user_id = i.user_id GROUP BY g.received_at, g.additional_glass, ( CASE WHEN g.coupon ~ similar_to_escape('[0-9]{1}[A-Z0-9]{3}'::text) OR g.coupon ~ similar_to_escape('[A-Z]{1}[0-9]{1}[A-Z0-9]{2}'::text) THEN 'INDICACAO'::text ELSE (regexp_match(g.coupon, '(.+)_.+'::text))[1] END), g.cep, g.user_id, g.additional_collision, g.is_service_vehicle, g.fipe, g.vehicle_type, g.error, i.phone ORDER BY g.received_at DESC`
+);
+
+export const iaCtwaPurchases = pgView("ia_ctwa_purchases", {
+  ctwaReceivedAt: date("ctwa_received_at"),
+  phone: text(),
+  resourceId: text("resource_id"),
+  receivedAt: date("received_at"),
+  quotationId: text("quotation_id"),
+  purchasedAt: timestamp("purchased_at", {
+    withTimezone: true,
+    mode: "string",
+  }),
+  purchased: integer(),
+}).as(
+  sql`WITH ctwa AS ( SELECT DISTINCT lia_ctwa.phone, lia_ctwa.resource_id, date(lia_ctwa.received_at) AS ctwa_received_at FROM lia_analytics_prd.lia_ctwa ), gen AS ( SELECT ct.phone, ct.resource_id, ct.ctwa_received_at, date(gq.received_at) AS received_at, gq.quotation_id, row_number() OVER (PARTITION BY gq.phone ORDER BY gq.received_at) AS row_n FROM ctwa ct LEFT JOIN lia_analytics_prd.generate_quotation_success gq ON ct.phone = gq.phone ), chat_gen AS ( SELECT ct.ctwa_received_at, ct.phone, ct.resource_id, g_1.received_at, g_1.quotation_id FROM ctwa ct LEFT JOIN gen g_1 ON ct.phone = g_1.phone ) SELECT g.ctwa_received_at, g.phone, g.resource_id, g.received_at, g.quotation_id, p.received_at AS purchased_at, CASE WHEN p.received_at IS NOT NULL THEN 1 ELSE 0 END AS purchased FROM chat_gen g LEFT JOIN api_sap_prd.purchased p ON g.quotation_id = p.quotation_id ORDER BY g.ctwa_received_at DESC`
+);
+
+export const iaCtwaChats = pgView("ia_ctwa_chats", {
+  phone: text(),
+  resourceId: text("resource_id"),
+  ctwaReceivedAt: date("ctwa_received_at"),
+}).as(
+  sql`SELECT DISTINCT phone, resource_id, date(received_at) AS ctwa_received_at FROM lia_analytics_prd.lia_ctwa`
+);
+
+export const sapErrors = pgView("sap_errors", {
+  receivedAt: date("received_at"),
+  requestMethod: text("request_method"),
+  requestUrl: text("request_url"),
+  contextPageUrl: text("context_page_url"),
+  error: text(),
+  userId: text("user_id"),
+  anonymousId: text("anonymous_id"),
+}).as(
+  sql`SELECT date(received_at) AS received_at, request_method, request_url, context_page_url, error, user_id, anonymous_id FROM js_error_tracking_dev.sap_error e WHERE received_at > (now() - '30 days'::interval) AND event = 'sap_error'::text AND context_page_url !~~ '%localhost%'::text`
+);
+
+export const adsClicksCount = pgView("ads_clicks_count", {
+  adNameGroup: text("ad_name_group"),
+  adNameCamp: text("ad_name_camp"),
+  utmSource: text("utm_source"),
+  utmMedium: text("utm_medium"),
+  utmContent: text("utm_content"),
+  campaignName: text("campaign_name"),
+  coupon: text(),
+  pageviewDate: date("pageview_date"),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  adClicks: bigint("ad_clicks", { mode: "number" }),
+}).as(
+  sql`SELECT CASE WHEN ad_name_group IS NULL THEN utm_content ELSE ad_name_group END AS ad_name_group, CASE WHEN ad_name_camp IS NULL THEN utm_content ELSE ad_name_camp END AS ad_name_camp, utm_source, utm_medium, utm_content, campaign_name, coupon, date(pageview_date) AS pageview_date, count(1) AS ad_clicks FROM mat_purchases_pageviews p WHERE referrer !~~ '%loovi.com.br%'::text AND ad_name_camp IS NOT NULL GROUP BY ad_name_group, pageview_date, utm_source, utm_medium, utm_content, campaign_name, coupon, ad_name_camp ORDER BY (date(pageview_date)) DESC`
+);
+
+export const globalErrors = pgView("global_errors", {
+  receivedAt: date("received_at"),
+  contextPageUrl: text("context_page_url"),
+  error: text(),
+  userId: text("user_id"),
+  anonymousId: text("anonymous_id"),
+}).as(
+  sql`SELECT date(received_at) AS received_at, context_page_url, error, user_id, anonymous_id FROM js_error_tracking_dev.global_error_handler e WHERE received_at > (now() - '30 days'::interval) AND context_page_url !~~ '%localhost%'::text`
+);
+
+export const wppPurchases = pgView("wpp_purchases", {
+  userId: text("user_id"),
+  quotationId: text("quotation_id"),
+  phone: text(),
+  receivedAt: date("received_at"),
+  purchasedAt: date("purchased_at"),
+  sellerName: text("seller_name"),
+  insideTouch: integer("inside_touch"),
+  executiveTouch: integer("executive_touch"),
+  liaTouch: integer("lia_touch"),
+  firstQuotationBy: text("first_quotation_by"),
+  firstQuotationDate: date("first_quotation_date"),
+}).as(
+  sql`SELECT s.user_id, s.quotation_id, s.phone, date((s.received_at AT TIME ZONE 'America/Sao_Paulo'::text)) AS received_at, date((p.received_at AT TIME ZONE 'America/Sao_Paulo'::text)) AS purchased_at, p.seller_name, p.inside_touch, p.executive_touch, p.lia_touch, p.first_quotation_by, p.first_quotation_date FROM cart_recovery_gallabox.cart_recovery_sent s LEFT JOIN purchases p ON s.user_id = p.user_id WHERE p.received_at >= s.received_at ORDER BY s.received_at DESC`
+);
+
+export const frontPurchases = pgView("front_purchases", {
+  receivedAt: timestamp("received_at", { mode: "string" }),
+  quotationId: text("quotation_id"),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  value: bigint({ mode: "number" }),
+  userId: text("user_id"),
+  sellerType: text("seller_type"),
+}).as(
+  sql`SELECT (received_at AT TIME ZONE 'America/Sao_Paulo'::text) AS received_at, quotation_id, value, user_id, seller_type FROM js_aquisicao_prd.purchased`
+);
+
+export const iaCartRecTimeToRespond = pgView("ia_cart_rec_time_to_respond", {
+  recSentAt: timestamp("rec_sent_at", { withTimezone: true, mode: "string" }),
+  msgReceivedAt: timestamp("msg_received_at", {
+    withTimezone: true,
+    mode: "string",
+  }),
+  msgDiff: interval("msg_diff"),
+  hoursDifference: numeric("hours_difference"),
+  phone: text(),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  rowN: bigint("row_n", { mode: "number" }),
+}).as(
+  sql`SELECT rec_sent_at, msg_received_at, msg_diff, hours_difference, phone, row_n FROM ( SELECT c.received_at AS rec_sent_at, m.received_at AS msg_received_at, m.received_at - c.received_at AS msg_diff, EXTRACT(epoch FROM m.received_at::timestamp without time zone - c.received_at::timestamp without time zone) AS hours_difference, c.phone, row_number() OVER (PARTITION BY c.phone ORDER BY c.received_at) AS row_n FROM cart_recovery_gallabox.cart_recovery_sent_ia c JOIN lia_analytics_prd.user_message m ON c.phone = m.phone WHERE c.received_at < m.received_at) unnamed_subquery WHERE row_n = 1`
+);
+
+export const iaAllNewChatsIdentifies = pgView("ia_all_new_chats_identifies", {
+  receivedAt: timestamp("received_at", { withTimezone: true, mode: "string" }),
+  phone: text(),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  "#": bigint("#", { mode: "number" }),
+  quotationId: text("quotation_id"),
+}).as(
+  sql`WITH chats_partition AS ( SELECT nc.received_at, nc.phone, row_number() OVER (PARTITION BY nc.phone ORDER BY nc.received_at) AS "#", r.quotation_id FROM lia_analytics_prd.user_message nc LEFT JOIN cart_recovery_gallabox.cart_recovery_sent_ia r ON nc.phone = r.phone WHERE length(nc.phone) <= 13 ORDER BY nc.received_at DESC ) SELECT received_at, phone, "#", quotation_id FROM chats_partition WHERE "#" = 1`
+);
+
+export const iaConversionRatesRecovery = pgView(
+  "ia_conversion_rates_recovery",
+  {
+    date: date(),
+    // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+    recChats: bigint("rec_chats", { mode: "number" }),
+    // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+    purchases: bigint({ mode: "number" }),
+    revenue: numeric(),
+    rateRec: numeric("rate_rec"),
+  }
+).as(
+  sql`WITH chats_partition AS ( SELECT date(r.received_at) AS date, r.phone, r.quotation_id, r.user_id, row_number() OVER (PARTITION BY r.phone ORDER BY r.received_at DESC) AS row_n FROM cart_recovery_gallabox.cart_recovery_sent_ia r JOIN lia_analytics_prd.user_message rp ON rp.phone = r.phone WHERE length(r.phone) <= 13 AND r.user_id IS NOT NULL AND rp.user_id IS NOT NULL ORDER BY r.received_at DESC ), chats AS ( SELECT chats_partition.date, chats_partition.phone, chats_partition.quotation_id, chats_partition.user_id, chats_partition.row_n FROM chats_partition WHERE chats_partition.row_n = 1 ), all_chats AS ( SELECT DISTINCT c_1.date, count(c_1.phone) AS rec_chats FROM chats c_1 GROUP BY c_1.date ORDER BY c_1.date DESC ), purchases_check AS ( SELECT DISTINCT c_1.date, count(DISTINCT p_1.user_id) AS purchases, sum(p_1.value) AS revenue FROM api_sap_prd.purchased p_1 JOIN chats c_1 ON p_1.user_id = c_1.user_id WHERE c_1.date <= date(p_1.received_at) GROUP BY c_1.date ORDER BY c_1.date DESC ) SELECT c.date, max(COALESCE(c.rec_chats, 0::bigint)) AS rec_chats, max(COALESCE(p.purchases, 0::bigint)) AS purchases, sum(COALESCE(p.revenue, 0::numeric)) AS revenue, COALESCE(sum(p.purchases) / NULLIF(sum(c.rec_chats), 0::numeric), 0::numeric) AS rate_rec FROM all_chats c LEFT JOIN purchases_check p ON c.date = p.date GROUP BY c.date ORDER BY c.date DESC`
+);
+
+export const iaQuotationPaid = pgView("ia_quotation_paid", {
+  generatedAt: timestamp("generated_at", {
+    withTimezone: true,
+    mode: "string",
+  }),
+  quotationId: text("quotation_id"),
+  purchasedQuotationId: text("purchased_quotation_id"),
+  purchasedAt: timestamp("purchased_at", {
+    withTimezone: true,
+    mode: "string",
+  }),
+  value: numeric(),
+  coupon: text(),
+  discount: numeric(),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  rowN: bigint("row_n", { mode: "number" }),
+  userId: text("user_id"),
+}).as(
+  sql`WITH purchases_after_gen AS ( SELECT g.received_at AS generated_at, g.quotation_id, p.quotation_id AS purchased_quotation_id, p.received_at AS purchased_at, p.value, (regexp_match(p.coupon, '(.+)_.+'::text))[1] AS coupon, p.discount, row_number() OVER (PARTITION BY p.quotation_id ORDER BY g.received_at) AS row_n, p.user_id FROM lia_analytics_prd.generate_quotation_success g LEFT JOIN api_sap_prd.purchased p ON g.user_id = p.user_id WHERE g.quotation_id IS NOT NULL AND g.received_at <= p.received_at ) SELECT generated_at, quotation_id, purchased_quotation_id, purchased_at, value, coupon, discount, row_n, user_id FROM purchases_after_gen WHERE row_n = 1 AND NOT (purchased_quotation_id IN ( SELECT i.purchased_quotation_id FROM ia_purchases_with_chat i))`
+);
+
+export const iaAllPurchasesIds = pgView("ia_all_purchases_ids", {
+  date: date(),
+  userId: text("user_id"),
+  purchasedQuotationId: text("purchased_quotation_id"),
+}).as(
+  sql`WITH one AS ( SELECT DISTINCT date(ia_quotation_paid.generated_at) AS date, ia_quotation_paid.user_id, ia_quotation_paid.purchased_quotation_id FROM ia_quotation_paid ), two AS ( SELECT DISTINCT date(ia_purchases_with_chat_v3.chat_received_at) AS date, ia_purchases_with_chat_v3.user_id, ia_purchases_with_chat_v3.purchased_quotation_id FROM ia_purchases_with_chat_v3 ), totals AS ( SELECT t.date, t.user_id, t.purchased_quotation_id FROM two t UNION SELECT o.date, o.user_id, o.purchased_quotation_id FROM one o ) SELECT DISTINCT date, user_id, purchased_quotation_id FROM totals`
+);
+
+export const iaConversionRates = pgView("ia_conversion_rates", {
+  chatDate: date("chat_date"),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  allChatsCount: bigint("all_chats_count", { mode: "number" }),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  prevQuotCount: bigint("prev_quot_count", { mode: "number" }),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  withoutQuotCount: bigint("without_quot_count", { mode: "number" }),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  allPurchases: bigint("all_purchases", { mode: "number" }),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  prevQuotPurchases: bigint("prev_quot_purchases", { mode: "number" }),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  withoutQuotPurchases: bigint("without_quot_purchases", { mode: "number" }),
+  rateAll: numeric("rate_all"),
+  ratePrevQuot: numeric("rate_prev_quot"),
+  rateWithoutQuot: numeric("rate_without_quot"),
+  usedCoupon: numeric("used_coupon"),
+  revenue: numeric(),
+  discount: numeric(),
+  usedCouponPrevQuot: numeric("used_coupon_prev_quot"),
+  revenuePrevQuot: numeric("revenue_prev_quot"),
+  discountPrevQuot: numeric("discount_prev_quot"),
+  usedCouponWithoutQuot: numeric("used_coupon_without_quot"),
+  revenueWithoutQuot: numeric("revenue_without_quot"),
+  discountWithoutQuot: numeric("discount_without_quot"),
+}).as(
+  sql`WITH chats_check AS ( SELECT DISTINCT date(i.received_at) AS date, i.phone, CASE WHEN i.quotation_id IS NOT NULL THEN 1 ELSE 0 END AS prev_quot FROM ia_all_new_chats_identifies i ORDER BY (date(i.received_at)) DESC ), all_chats AS ( SELECT DISTINCT c.date, count(c.phone) AS all_chats_count, sum(c.prev_quot) AS prev_quot_count, count(c.phone) - sum(c.prev_quot) AS without_quot_count FROM chats_check c GROUP BY c.date ORDER BY c.date DESC ), purchases_check AS ( SELECT p.date, p.purchased_quotation_id, p.user_id, u.phone, CASE WHEN c.quotation_id IS NOT NULL OR i.quotation_id IS NOT NULL THEN 1 ELSE 0 END AS prev_quot FROM ia_all_purchases_ids p JOIN phone_to_user_mapping_v3 u ON p.user_id = u.user_id LEFT JOIN cart_recovery_gallabox.cart_recovery_sent_ia c ON p.user_id = c.user_id LEFT JOIN ia_all_new_chats_identifies i ON u.phone = i.phone WHERE date(c.received_at) <= p.date ORDER BY p.date DESC ), revenue AS ( SELECT p.date, sum( CASE WHEN pu.coupon IS NOT NULL THEN 1 ELSE 0 END) AS used_coupon, sum(pu.value) AS revenue, sum(pu.discount) AS discount, sum( CASE WHEN pc.prev_quot = 1 THEN pu.value ELSE 0::numeric END) AS revenue_prev_quot, sum( CASE WHEN pc.prev_quot = 0 THEN pu.value ELSE 0::numeric END) AS revenue_without_quot, sum( CASE WHEN pc.prev_quot = 1 THEN pu.discount ELSE 0::numeric END) AS discount_prev_quot, sum( CASE WHEN pc.prev_quot = 0 THEN pu.discount ELSE 0::numeric END) AS discount_without_quot, sum( CASE WHEN pc.prev_quot = 1 THEN CASE WHEN pu.coupon IS NOT NULL THEN 1 ELSE 0 END ELSE 0 END) AS used_coupon_prev_quot, sum( CASE WHEN pc.prev_quot = 0 THEN CASE WHEN pu.coupon IS NOT NULL THEN 1 ELSE 0 END ELSE 0 END) AS used_coupon_without_quot FROM ia_all_purchases_ids p LEFT JOIN api_sap_prd.purchased pu ON p.purchased_quotation_id = pu.quotation_id LEFT JOIN purchases_check pc ON p.purchased_quotation_id = pc.purchased_quotation_id GROUP BY p.date ), totals AS ( SELECT purchases_check.date, count(*) AS all_purchases, sum(purchases_check.prev_quot) AS prev_quot_purchases, count(*) - sum(purchases_check.prev_quot) AS without_quot_purchases FROM purchases_check GROUP BY purchases_check.date ) SELECT a.date AS chat_date, a.all_chats_count, a.prev_quot_count, a.without_quot_count, COALESCE(t.all_purchases, 0::bigint) AS all_purchases, COALESCE(t.prev_quot_purchases, 0::bigint) AS prev_quot_purchases, COALESCE(t.without_quot_purchases, 0::bigint) AS without_quot_purchases, COALESCE(sum(t.all_purchases) / NULLIF(sum(a.all_chats_count), 0::numeric), 0::numeric) AS rate_all, COALESCE(sum(t.prev_quot_purchases) / NULLIF(sum(a.prev_quot_count), 0::numeric), 0::numeric) AS rate_prev_quot, COALESCE(sum(t.without_quot_purchases) / NULLIF(sum(a.without_quot_count), 0::numeric), 0::numeric) AS rate_without_quot, COALESCE(sum(r.used_coupon), 0::numeric) AS used_coupon, COALESCE(sum(r.revenue), 0::numeric) AS revenue, COALESCE(sum(r.discount), 0::numeric) AS discount, COALESCE(sum(r.used_coupon_prev_quot), 0::numeric) AS used_coupon_prev_quot, COALESCE(sum(r.revenue_prev_quot), 0::numeric) AS revenue_prev_quot, COALESCE(sum(r.discount_prev_quot), 0::numeric) AS discount_prev_quot, COALESCE(sum(r.used_coupon_without_quot), 0::numeric) AS used_coupon_without_quot, COALESCE(sum(r.revenue_without_quot), 0::numeric) AS revenue_without_quot, COALESCE(sum(r.discount_without_quot), 0::numeric) AS discount_without_quot FROM all_chats a LEFT JOIN totals t ON a.date = t.date LEFT JOIN revenue r ON a.date = r.date GROUP BY a.date, a.all_chats_count, a.prev_quot_count, a.without_quot_count, (COALESCE(t.all_purchases, 0::bigint)), (COALESCE(t.prev_quot_purchases, 0::bigint)), (COALESCE(t.without_quot_purchases, 0::bigint))`
+);
+
+export const metaPageviews1To1 = pgMaterializedView("meta_pageviews_1to1", {
+  receivedAt: date("received_at"),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  count: bigint({ mode: "number" }),
+}).as(
+  sql`SELECT date(received_at) AS received_at, count(1) AS count FROM js_aquisicao_prd.pages p WHERE received_at >= '2025-01-01 00:00:00+00'::timestamp with time zone AND (context_campaign_source = ANY (ARRAY['metaads'::text, 'fb_ads'::text])) GROUP BY received_at`
+);
+
+export const wppRecoverySentUnified = pgView("wpp_recovery_sent_unified", {
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  rowN: bigint("row_n", { mode: "number" }),
+  receivedAt: timestamp("received_at", { withTimezone: true, mode: "string" }),
+  phone: text(),
+  sentToIa: boolean("sent_to_ia"),
+  userId: text("user_id"),
+  quotationId: text("quotation_id"),
+  plan: text(),
+  value: numeric(),
+  discount: numeric(),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  registrationFee: bigint("registration_fee", { mode: "number" }),
+}).as(
+  sql`WITH cart_recovery_unified AS ( SELECT row_number() OVER (PARTITION BY t.user_id ORDER BY t.received_at) AS row_n, t.received_at, COALESCE(cr.phone, cri.phone) AS phone, CASE WHEN t.event_text = 'cart_recovery_sent_ia'::text THEN true WHEN t.event_text = 'cart_recovery_sent'::text THEN false ELSE NULL::boolean END AS sent_to_ia, t.user_id, COALESCE(cr.quotation_id, cri.quotation_id) AS quotation_id, COALESCE(cr.plan, cri.plan) AS plan, q.value, q.discount, q.registration_fee FROM cart_recovery_gallabox.tracks t LEFT JOIN cart_recovery_gallabox.cart_recovery_sent cr ON cr.id::text = t.id::text LEFT JOIN cart_recovery_gallabox.cart_recovery_sent_ia cri ON cri.id::text = t.id::text LEFT JOIN n8n_quotation_info.quotation_info q ON q.quotation_id = COALESCE(cr.quotation_id, cri.quotation_id) WHERE t.event_text = ANY (ARRAY['cart_recovery_sent_ia'::text, 'cart_recovery_sent'::text]) ORDER BY t.received_at DESC ) SELECT row_n, received_at, phone, sent_to_ia, user_id, quotation_id, plan, value, discount, registration_fee FROM cart_recovery_unified WHERE row_n = 1`
+);
+
+export const wppRecoveryStatus = pgView("wpp_recovery_status", {
+  userId: text("user_id"),
+  receivedAt: date("received_at"),
+  plan: text(),
+  quotationId: text("quotation_id"),
+  phone: text(),
+  responded: text(),
+}).as(
+  sql`SELECT s.user_id, date((s.received_at AT TIME ZONE 'America/Sao_Paulo'::text)) AS received_at, s.plan, s.quotation_id, s.phone, CASE WHEN r.id IS NOT NULL THEN 'true'::text ELSE 'false'::text END AS responded FROM cart_recovery_gallabox.cart_recovery_sent s LEFT JOIN cart_recovery_gallabox.cart_recovery_responded r ON s.user_id = r.user_id WHERE s.user_id IS NOT NULL ORDER BY ((s.received_at AT TIME ZONE 'America/Sao_Paulo'::text)) DESC`
+);
+
+export const wppRecoveryIaStatus = pgView("wpp_recovery_ia_status", {
+  userId: text("user_id"),
+  receivedAt: date("received_at"),
+  plan: text(),
+  quotationId: text("quotation_id"),
+  phone: text(),
+  responded: text(),
+}).as(
+  sql`SELECT s.user_id, date((s.received_at AT TIME ZONE 'America/Sao_Paulo'::text)) AS received_at, s.plan, s.quotation_id, s.phone, CASE WHEN r.id IS NOT NULL THEN 'true'::text ELSE 'false'::text END AS responded FROM cart_recovery_gallabox.cart_recovery_sent_ia s LEFT JOIN cart_recovery_gallabox.cart_recovery_responded r ON s.user_id = r.user_id WHERE s.user_id IS NOT NULL ORDER BY ((s.received_at AT TIME ZONE 'America/Sao_Paulo'::text)) DESC`
+);
+
+export const iaChatThenPaid = pgView("ia_chat_then_paid", {
+  newChatDate: timestamp("new_chat_date", {
+    withTimezone: true,
+    mode: "string",
+  }),
+  phone: text(),
+  newChatQuotationId: text("new_chat_quotation_id"),
+  sapUserId: text("sap_user_id"),
+  purchasedQuotationId: text("purchased_quotation_id"),
+  purchasedDate: timestamp("purchased_date", {
+    withTimezone: true,
+    mode: "string",
+  }),
+  value: numeric(),
+  discount: numeric(),
+  coupon: text(),
+}).as(
+  sql`WITH new_chats_partition AS ( SELECT n_1.received_at, n_1.phone, n_1.quotation_id, row_number() OVER (PARTITION BY n_1.phone ORDER BY n_1.received_at) AS row_n FROM lia_analytics_prd.new_chat n_1 WHERE length(n_1.phone) <= 13 AND length(n_1.phone) >= 9 AND (regexp_match(n_1.phone, '[0-9]+'::text))[1] IS NOT NULL ), new_chats AS ( SELECT DISTINCT new_chats_partition.received_at, new_chats_partition.phone, new_chats_partition.quotation_id FROM new_chats_partition WHERE new_chats_partition.row_n = 1 ) SELECT n.received_at AS new_chat_date, n.phone, n.quotation_id AS new_chat_quotation_id, p.user_id AS sap_user_id, p.quotation_id AS purchased_quotation_id, p.received_at AS purchased_date, p.value, p.discount, (regexp_match(p.coupon, '(.+)_.+'::text))[1] AS coupon FROM new_chats n LEFT JOIN api_sap_prd.purchased p ON n.quotation_id = p.quotation_id WHERE n.received_at <= (p.received_at + '30 days'::interval) OR p.received_at IS NULL ORDER BY n.received_at DESC`
+);
+
+export const kwaiTempAnon = pgMaterializedView("kwai_temp_anon", {
+  receivedAt: date("received_at"),
+  anonymousId: text("anonymous_id"),
+}).as(
+  sql`SELECT DISTINCT date(received_at) AS received_at, anonymous_id FROM js_aquisicao_prd.pages p WHERE received_at >= '2025-09-05 00:00:00+00'::timestamp with time zone AND context_page_url ~~ '%&click_id=%'::text`
+);
+
+export const wppRecoveryStatusIa = pgView("wpp_recovery_status_ia", {
+  userId: text("user_id"),
+  receivedAt: date("received_at"),
+  plan: text(),
+  template: text(),
+  quotationId: text("quotation_id"),
+  phone: text(),
+  responded: text(),
+}).as(
+  sql`SELECT s.user_id, date((s.received_at AT TIME ZONE 'America/Sao_Paulo'::text)) AS received_at, s.plan, s.template, s.quotation_id, s.phone, CASE WHEN r.id IS NOT NULL THEN 'true'::text ELSE 'false'::text END AS responded FROM cart_recovery_gallabox.cart_recovery_sent_ia s LEFT JOIN lia_analytics_prd.user_message r ON s.phone = r.phone GROUP BY s.user_id, (date((s.received_at AT TIME ZONE 'America/Sao_Paulo'::text))), s.plan, s.template, s.quotation_id, s.phone, ( CASE WHEN r.id IS NOT NULL THEN 'true'::text ELSE 'false'::text END), s.received_at ORDER BY ((s.received_at AT TIME ZONE 'America/Sao_Paulo'::text)) DESC`
+);
+
+export const leadsBlackfriday2025Email = pgMaterializedView(
+  "leads_blackfriday_2025_email",
+  {
+    name: text(),
+    email: text(),
+    quotationId: text("quotation_id"),
+    monthYear: text("month_year"),
+  }
+).as(
+  sql`WITH unified_leads AS ( SELECT l.user_id, l.email, NULLIF(TRIM(BOTH FROM l.context_traits_name), ''::text) AS raw_name, l.received_at, 1 AS source_priority FROM ( SELECT lead.user_id, lead.context_traits_name, lead.received_at, lead.email FROM js_aquisicao_prd.lead) l WHERE l.user_id IS NOT NULL AND l.email IS NOT NULL AND l.received_at >= (now() - '1 year'::interval) ), latest_leads AS ( SELECT ordered.user_id, ordered.email, ordered.raw_name, ordered.received_at FROM ( SELECT u.user_id, u.email, u.raw_name, u.received_at, u.source_priority, row_number() OVER (PARTITION BY u.user_id ORDER BY u.received_at DESC, u.source_priority) AS rn FROM unified_leads u) ordered WHERE ordered.rn = 1 ), qualified_quotations AS ( SELECT q.user_id, q.quotation_id, NULLIF(TRIM(BOTH FROM q.client_name), ''::text) AS client_name, q.received_at, row_number() OVER (PARTITION BY q.user_id ORDER BY q.received_at DESC, q.quotation_id DESC) AS rn FROM api_sap_prd.quotation_generated q WHERE q.user_id IS NOT NULL AND (q.seller_id = ANY (ARRAY[16::bigint, 19::bigint])) AND q.quotation_id IS NOT NULL AND q.received_at >= (now() - '1 year'::interval) ), latest_quotations AS ( SELECT qualified_quotations.user_id, qualified_quotations.quotation_id, qualified_quotations.client_name, qualified_quotations.received_at AS last_quotation_at FROM qualified_quotations WHERE qualified_quotations.rn = 1 ), purchased_users AS ( SELECT DISTINCT purchased.user_id FROM api_sap_prd.purchased WHERE purchased.user_id IS NOT NULL ), executive_users AS ( SELECT DISTINCT executive_quotation.user_id FROM js_aquisicao_prd.executive_quotation WHERE executive_quotation.user_id IS NOT NULL ), filtered_leads AS ( SELECT nl.user_id, nl.email, COALESCE(nl.raw_name, lq.client_name) AS best_name, lq.quotation_id, lq.last_quotation_at FROM latest_leads nl JOIN latest_quotations lq ON lq.user_id = nl.user_id LEFT JOIN purchased_users pu ON pu.user_id = nl.user_id LEFT JOIN executive_users eu ON eu.user_id = nl.user_id WHERE pu.user_id IS NULL AND eu.user_id IS NULL ), final_format AS ( SELECT ff.user_id, ff.email, ff.quotation_id, ff.last_quotation_at, initcap(COALESCE(NULLIF("substring"(ff.cleaned_name, '([[:alpha:]]+)'::text), ''::text), 'cliente'::text)) AS first_name FROM ( SELECT fl.user_id, fl.email, fl.quotation_id, fl.last_quotation_at, regexp_replace(regexp_replace(lower(COALESCE(NULLIF(TRIM(BOTH FROM fl.best_name), ''::text), 'cliente'::text)), '[@._-]+'::text, ' '::text, 'g'::text), '[^[:alpha:] ]'::text, ' '::text, 'g'::text) AS cleaned_name FROM filtered_leads fl) ff ) SELECT first_name AS name, email, concat(quotation_id, '/BLACK500?utm_source=email&utm_medium=bf') AS quotation_id, to_char(last_quotation_at, 'MM-YYYY'::text) AS month_year FROM final_format WHERE first_name IS NOT NULL AND first_name <> ''::text ORDER BY last_quotation_at DESC`
+);
+
+export const leadsBlackfriday2025EmailDistinct = pgMaterializedView(
+  "leads_blackfriday_2025_email_distinct",
+  {
+    name: text(),
+    email: text(),
+    quotationId: text("quotation_id"),
+    monthYear: text("month_year"),
+    // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+    rn: bigint({ mode: "number" }),
+  }
+).as(
+  sql`SELECT name, email, quotation_id, month_year, rn FROM ( SELECT b1.name, b1.email, b1.quotation_id, b1.month_year, row_number() OVER (PARTITION BY b1.email ORDER BY b1.month_year DESC) AS rn FROM leads_blackfriday_2025_email b1) unnamed_subquery WHERE rn = 1`
+);
+
+export const iaConversionRatesCtwa = pgView("ia_conversion_rates_ctwa", {
+  date: date(),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  ctwaChats: bigint("ctwa_chats", { mode: "number" }),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  purchases: bigint({ mode: "number" }),
+  revenue: numeric(),
+  rateRec: numeric("rate_rec"),
+}).as(
+  sql`WITH chats_partition AS ( SELECT date(r.received_at) AS date, r.phone, row_number() OVER (PARTITION BY r.phone ORDER BY r.received_at DESC) AS row_n FROM lia_analytics_prd.lia_ctwa r WHERE length(r.phone) <= 13 ORDER BY r.received_at DESC ), chats AS ( SELECT chats_partition.date, chats_partition.phone, chats_partition.row_n FROM chats_partition WHERE chats_partition.row_n = 1 ), all_chats AS ( SELECT DISTINCT c_1.date, count(c_1.phone) AS ctwa_chats FROM chats c_1 GROUP BY c_1.date ORDER BY c_1.date DESC ), purchases_check AS ( SELECT DISTINCT c_1.date, count(DISTINCT p_1.user_id) AS purchases, sum(p_1.value) AS revenue FROM api_sap_prd.purchased p_1 JOIN chats c_1 ON concat('55', p_1.client_phone_number) = c_1.phone WHERE c_1.date <= date(p_1.received_at) GROUP BY c_1.date ORDER BY c_1.date DESC ) SELECT c.date, max(COALESCE(c.ctwa_chats, 0::bigint)) AS ctwa_chats, max(COALESCE(p.purchases, 0::bigint)) AS purchases, sum(COALESCE(p.revenue, 0::numeric)) AS revenue, COALESCE(sum(p.purchases) / NULLIF(sum(c.ctwa_chats), 0::numeric), 0::numeric) AS rate_rec FROM all_chats c LEFT JOIN purchases_check p ON c.date = p.date GROUP BY c.date ORDER BY c.date DESC`
+);
+
+export const iaConversionRatesAll = pgView("ia_conversion_rates_all", {
+  date: date(),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  chats: bigint({ mode: "number" }),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  purchases: bigint({ mode: "number" }),
+  revenue: numeric(),
+  rateAll: numeric("rate_all"),
+}).as(
+  sql`WITH chats_partition AS ( SELECT date(r.received_at) AS date, r.phone, row_number() OVER (PARTITION BY r.phone ORDER BY r.received_at DESC) AS row_n FROM lia_analytics_prd.user_message r WHERE length(r.phone) <= 13 ORDER BY r.received_at DESC ), chats AS ( SELECT chats_partition.date, chats_partition.phone, chats_partition.row_n FROM chats_partition WHERE chats_partition.row_n = 1 ), all_chats AS ( SELECT DISTINCT c_1.date, count(DISTINCT c_1.phone) AS chats FROM chats c_1 GROUP BY c_1.date ORDER BY c_1.date DESC ), purchases_check AS ( SELECT DISTINCT c_1.date, count(DISTINCT p_1.user_id) AS purchases, sum(p_1.value) AS revenue FROM api_sap_prd.purchased p_1 JOIN chats c_1 ON concat('55', p_1.client_phone_number) = c_1.phone WHERE c_1.date <= date(p_1.received_at) GROUP BY c_1.date ORDER BY c_1.date DESC ) SELECT c.date, max(COALESCE(c.chats, 0::bigint)) AS chats, max(COALESCE(p.purchases, 0::bigint)) AS purchases, sum(COALESCE(p.revenue, 0::numeric)) AS revenue, COALESCE(sum(p.purchases) / NULLIF(sum(c.chats), 0::numeric), 0::numeric) AS rate_all FROM all_chats c LEFT JOIN purchases_check p ON c.date = p.date GROUP BY c.date ORDER BY c.date DESC`
+);
+
+export const vUserPhoneMapping = pgView("v_user_phone_mapping", {
+  userId: text("user_id"),
+  phone: text(),
+}).as(
+  sql`SELECT DISTINCT user_id, phone FROM lia_analytics_prd.generate_quotation_success WHERE user_id IS NOT NULL`
+);
+
+export const liaAssignSalesTeam = pgView("lia_assign_sales_team", {
+  receivedAt: timestamp("received_at", { withTimezone: true, mode: "string" }),
+  conversationId: text("conversation_id"),
+  phone: text(),
+  userId: text("user_id"),
+}).as(
+  sql`SELECT received_at, conversation_id, phone, user_id FROM cart_recovery_gallabox.lia_assign_sales_team a`
+);
+
+export const purchaseJourneyUsersV = pgView("purchase_journey_users_v", {
+  userId: text("user_id"),
+  purchasedAt: timestamp("purchased_at", {
+    withTimezone: true,
+    mode: "string",
+  }),
+  purchaseId: varchar("purchase_id", { length: 1024 }),
+  coupon: text(),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  sellerId: bigint("seller_id", { mode: "number" }),
+  sellerName: text("seller_name"),
+  paymentType: text("payment_type"),
+  purchaseValue: numeric("purchase_value"),
+  contextIp: text("context_ip"),
+  purchaseDate: date("purchase_date"),
+  origins: text(),
+  originSources: text("origin_sources"),
+  originMediums: text("origin_mediums"),
+  originCount: integer("origin_count"),
+  firstOrigin: text("first_origin"),
+  firstSource: text("first_source"),
+  firstMedium: text("first_medium"),
+  lastOrigin: text("last_origin"),
+  lastSource: text("last_source"),
+  lastMedium: text("last_medium"),
+  originsWithPurchase: text("origins_with_purchase"),
+}).as(
+  sql`SELECT user_id, purchased_at, purchase_id, coupon, seller_id, seller_name, payment_type, purchase_value, context_ip, purchase_date, origins, origin_sources, origin_mediums, origin_count, first_origin, first_source, first_medium, last_origin, last_source, last_medium, origins_with_purchase FROM mv_purchase_journey_users`
+);
+
+export const purchaseJourneyStepsV = pgView("purchase_journey_steps_v", {
+  pathPrefix: text("path_prefix"),
+  pathWithNext: text("path_with_next"),
+  pathPrefixText: text("path_prefix_text"),
+  pathWithNextText: text("path_with_next_text"),
+  stepOrigin: text("step_origin"),
+  nextOrigin: text("next_origin"),
+  hopIndex: integer("hop_index"),
+  originCount: integer("origin_count"),
+  purchaseDate: date("purchase_date"),
+  coupon: text(),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  sellerId: bigint("seller_id", { mode: "number" }),
+  sellerName: text("seller_name"),
+  paymentType: text("payment_type"),
+  firstOrigin: text("first_origin"),
+  firstSource: text("first_source"),
+  firstMedium: text("first_medium"),
+  lastOrigin: text("last_origin"),
+  lastSource: text("last_source"),
+  lastMedium: text("last_medium"),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  userCount: bigint("user_count", { mode: "number" }),
+}).as(
+  sql`SELECT path_prefix, path_with_next, path_prefix_text, path_with_next_text, step_origin, next_origin, hop_index, origin_count, purchase_date, coupon, seller_id, seller_name, payment_type, first_origin, first_source, first_medium, last_origin, last_source, last_medium, user_count FROM mv_purchase_journey_steps`
+);
+
+export const leadsBlackfriday2025 = pgMaterializedView(
+  "leads_blackfriday_2025",
+  {
+    phone: text("Phone"),
+    name: text(),
+    quotationId: text("quotation_id"),
+    monthYear: text("month_year"),
+  }
+).as(
+  sql`WITH lead_events AS ( SELECT l.user_id, concat('55', l.clean_phone) AS full_phone, NULLIF(TRIM(BOTH FROM l.context_traits_name), ''::text) AS raw_name, l.received_at, 1 AS source_priority FROM ( SELECT lead.user_id, lead.context_traits_name, lead.received_at, regexp_replace(COALESCE(lead.context_traits_phone, ''::text), '\D'::text, ''::text, 'g'::text) AS clean_phone FROM js_aquisicao_prd.lead) l WHERE l.user_id IS NOT NULL AND l.clean_phone ~ '^\d{2}9\d{8}$'::text AND l.received_at >= (now() - '1 year'::interval) ), identify_events AS ( SELECT i.user_id, i.clean_phone AS full_phone, NULL::text AS raw_name, i.received_at, 2 AS source_priority FROM ( SELECT identifies.user_id, identifies.received_at, regexp_replace(COALESCE(identifies.phone, ''::text), '\D'::text, ''::text, 'g'::text) AS clean_phone FROM lia_analytics_prd.identifies) i WHERE i.user_id IS NOT NULL AND i.clean_phone ~ '^55\d{2}9\d{8}$'::text AND i.received_at >= (now() - '1 year'::interval) ), unified_leads AS ( SELECT lead_events.user_id, lead_events.full_phone, lead_events.raw_name, lead_events.received_at, lead_events.source_priority FROM lead_events UNION ALL SELECT identify_events.user_id, identify_events.full_phone, identify_events.raw_name, identify_events.received_at, identify_events.source_priority FROM identify_events ), latest_leads AS ( SELECT ordered.user_id, ordered.full_phone, ordered.raw_name, ordered.received_at FROM ( SELECT u.user_id, u.full_phone, u.raw_name, u.received_at, u.source_priority, row_number() OVER (PARTITION BY u.user_id ORDER BY u.received_at DESC, u.source_priority) AS rn FROM unified_leads u) ordered WHERE ordered.rn = 1 ), qualified_quotations AS ( SELECT q.user_id, q.quotation_id, NULLIF(TRIM(BOTH FROM q.client_name), ''::text) AS client_name, q.received_at, row_number() OVER (PARTITION BY q.user_id ORDER BY q.received_at DESC, q.quotation_id DESC) AS rn FROM api_sap_prd.quotation_generated q WHERE q.user_id IS NOT NULL AND (q.seller_id = ANY (ARRAY[16::bigint, 19::bigint])) AND q.quotation_id IS NOT NULL AND q.received_at >= (now() - '1 year'::interval) ), latest_quotations AS ( SELECT qualified_quotations.user_id, qualified_quotations.quotation_id, qualified_quotations.client_name, qualified_quotations.received_at AS last_quotation_at FROM qualified_quotations WHERE qualified_quotations.rn = 1 ), purchased_users AS ( SELECT DISTINCT purchased.user_id FROM api_sap_prd.purchased WHERE purchased.user_id IS NOT NULL ), executive_users AS ( SELECT DISTINCT executive_quotation.user_id FROM js_aquisicao_prd.executive_quotation WHERE executive_quotation.user_id IS NOT NULL ), filtered_leads AS ( SELECT nl.user_id, nl.full_phone, COALESCE(nl.raw_name, lq.client_name) AS best_name, lq.quotation_id, lq.last_quotation_at FROM latest_leads nl JOIN latest_quotations lq ON lq.user_id = nl.user_id LEFT JOIN purchased_users pu ON pu.user_id = nl.user_id LEFT JOIN executive_users eu ON eu.user_id = nl.user_id WHERE pu.user_id IS NULL AND eu.user_id IS NULL ), final_format AS ( SELECT ff.user_id, ff.full_phone, ff.quotation_id, ff.last_quotation_at, initcap(COALESCE(NULLIF("substring"(ff.cleaned_name, '([[:alpha:]]+)'::text), ''::text), 'cliente'::text)) AS first_name FROM ( SELECT fl.user_id, fl.full_phone, fl.quotation_id, fl.last_quotation_at, regexp_replace(regexp_replace(lower(COALESCE(NULLIF(TRIM(BOTH FROM fl.best_name), ''::text), 'cliente'::text)), '[@._-]+'::text, ' '::text, 'g'::text), '[^[:alpha:] ]'::text, ' '::text, 'g'::text) AS cleaned_name FROM filtered_leads fl) ff ) SELECT first_name AS "Name", full_phone AS "Phone", first_name AS name, concat(quotation_id, '/BLACK500?utm_source=wpp&utm_medium=bf') AS quotation_id, to_char(last_quotation_at, 'MM-YYYY'::text) AS month_year FROM final_format WHERE first_name IS NOT NULL AND first_name <> ''::text ORDER BY last_quotation_at DESC`
+);
+
+export const purchasesPageviewsFirstclick = pgMaterializedView(
+  "purchases_pageviews_firstclick",
+  {
+    anonId: text("anon_id"),
+    pageviewDate: timestamp("pageview_date", { mode: "string" }),
+    userId: text("user_id"),
+    purchaseDate: timestamp("purchase_date", { mode: "string" }),
+    quotationId: text("quotation_id"),
+    coupon: text(),
+    // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+    sellerId: bigint("seller_id", { mode: "number" }),
+    utmSource: text("utm_source"),
+    utmMedium: text("utm_medium"),
+    utmContent: text("utm_content"),
+    campaignName: text("campaign_name"),
+    adName: text("ad_name"),
+    adNameGroup: text("ad_name_group"),
+    adNameCamp: text("ad_name_camp"),
+    pageUrl: text("page_url"),
+    pagePath: text("page_path"),
+    referrer: text(),
+    // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+    pageviewOrder: bigint("pageview_order", { mode: "number" }),
+    // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+    rn: bigint({ mode: "number" }),
+    liaTouch: integer("lia_touch"),
+    executiveTouch: integer("executive_touch"),
+    insideTouch: integer("inside_touch"),
+    firstQuotationBy: text("first_quotation_by"),
+    sellerName: text("seller_name"),
+  }
+).as(
+  sql`WITH firstclick_pageviews AS ( SELECT mat_purchases_pageviews.anon_id, mat_purchases_pageviews.pageview_date, mat_purchases_pageviews.user_id, mat_purchases_pageviews.purchase_date, mat_purchases_pageviews.quotation_id, mat_purchases_pageviews.coupon, mat_purchases_pageviews.seller_id, mat_purchases_pageviews.utm_source, mat_purchases_pageviews.utm_medium, mat_purchases_pageviews.utm_content, mat_purchases_pageviews.campaign_name, mat_purchases_pageviews.ad_name, mat_purchases_pageviews.ad_name_group, mat_purchases_pageviews.ad_name_camp, mat_purchases_pageviews.page_url, mat_purchases_pageviews.page_path, mat_purchases_pageviews.referrer, mat_purchases_pageviews.pageview_order, row_number() OVER (PARTITION BY mat_purchases_pageviews.user_id ORDER BY mat_purchases_pageviews.pageview_date) AS rn FROM mat_purchases_pageviews WHERE mat_purchases_pageviews.utm_source IS NOT NULL OR mat_purchases_pageviews.utm_medium IS NOT NULL OR mat_purchases_pageviews.campaign_name IS NOT NULL OR mat_purchases_pageviews.ad_name IS NOT NULL ), firstclick AS ( SELECT firstclick_pageviews.anon_id, firstclick_pageviews.pageview_date, firstclick_pageviews.user_id, firstclick_pageviews.purchase_date, firstclick_pageviews.quotation_id, firstclick_pageviews.coupon, firstclick_pageviews.seller_id, firstclick_pageviews.utm_source, firstclick_pageviews.utm_medium, firstclick_pageviews.utm_content, firstclick_pageviews.campaign_name, firstclick_pageviews.ad_name, firstclick_pageviews.ad_name_group, firstclick_pageviews.ad_name_camp, firstclick_pageviews.page_url, firstclick_pageviews.page_path, firstclick_pageviews.referrer, firstclick_pageviews.pageview_order, firstclick_pageviews.rn FROM firstclick_pageviews WHERE firstclick_pageviews.rn = 1 ), touches AS ( SELECT p_1.user_id, max( CASE WHEN q.seller_id = ANY (ARRAY[16::bigint, 19::bigint]) THEN 1 ELSE 0 END) AS lia_touch, max( CASE WHEN q.seller_id <> ALL (ARRAY[16::bigint, 19::bigint, 47197::bigint, 47195::bigint, 47218::bigint, 47854::bigint, 47211::bigint, 47250::bigint, 47849::bigint, 47385::bigint, 47200::bigint, 47192::bigint, 47205::bigint, 47850::bigint, 47223::bigint, 47165::bigint, 47374::bigint, 47368::bigint, 47194::bigint, 47206::bigint, 47236::bigint, 43925::bigint, 47225::bigint, 47388::bigint, 47202::bigint, 47393::bigint, 47199::bigint, 47193::bigint, 47162::bigint, 47198::bigint, 47259::bigint, 47378::bigint, 47262::bigint, 47185::bigint, 47365::bigint, 47163::bigint, 47853::bigint, 47381::bigint, 47164::bigint, 47190::bigint, 47203::bigint, 43926::bigint, 47851::bigint, 49444::bigint, 49442::bigint, 49443::bigint, 49445::bigint, 49476::bigint, 49525::bigint, 49524::bigint, 49815::bigint, 49816::bigint, 49817::bigint, 49818::bigint, 49861::bigint]) THEN 1 ELSE 0 END) AS executive_touch, max( CASE WHEN q.seller_id = ANY (ARRAY[47197::bigint, 47195::bigint, 47218::bigint, 47854::bigint, 47211::bigint, 47250::bigint, 47849::bigint, 47385::bigint, 47200::bigint, 47192::bigint, 47205::bigint, 47850::bigint, 47223::bigint, 47165::bigint, 47374::bigint, 47368::bigint, 47194::bigint, 47206::bigint, 47236::bigint, 43925::bigint, 47225::bigint, 47388::bigint, 47202::bigint, 47393::bigint, 47199::bigint, 47193::bigint, 47162::bigint, 47198::bigint, 47259::bigint, 47378::bigint, 47262::bigint, 47185::bigint, 47365::bigint, 47163::bigint, 47853::bigint, 47381::bigint, 47164::bigint, 47190::bigint, 47203::bigint, 43926::bigint, 47851::bigint, 49444::bigint, 49442::bigint, 49443::bigint, 49445::bigint, 49476::bigint, 49525::bigint, 49524::bigint, 49815::bigint, 49816::bigint, 49817::bigint, 49818::bigint, 49861::bigint]) THEN 1 ELSE 0 END) AS inside_touch FROM firstclick p_1 JOIN api_sap_prd.quotation_generated q ON p_1.user_id = q.user_id GROUP BY p_1.user_id ), first_quot AS ( SELECT p_1.user_id, CASE WHEN quot_ordered.seller_id = ANY (ARRAY[16::bigint, 19::bigint]) THEN 'LIA'::text WHEN quot_ordered.seller_id = ANY (ARRAY[47197::bigint, 47195::bigint, 47218::bigint, 47854::bigint, 47211::bigint, 47250::bigint, 47849::bigint, 47385::bigint, 47200::bigint, 47192::bigint, 47205::bigint, 47850::bigint, 47223::bigint, 47165::bigint, 47374::bigint, 47368::bigint, 47194::bigint, 47206::bigint, 47236::bigint, 43925::bigint, 47225::bigint, 47388::bigint, 47202::bigint, 47393::bigint, 47199::bigint, 47193::bigint, 47162::bigint, 47198::bigint, 47259::bigint, 47378::bigint, 47262::bigint, 47185::bigint, 47365::bigint, 47163::bigint, 47853::bigint, 47381::bigint, 47164::bigint, 47190::bigint, 47203::bigint, 43926::bigint, 47851::bigint, 49444::bigint, 49442::bigint, 49443::bigint, 49445::bigint, 49476::bigint, 49525::bigint, 49524::bigint, 49815::bigint, 49816::bigint, 49817::bigint, 49818::bigint, 49861::bigint]) THEN 'INSIDE'::text ELSE 'Executivo'::text END AS first_quotation_by FROM firstclick p_1 JOIN ( SELECT quotation_generated.id, quotation_generated.received_at, quotation_generated.context_library_version, quotation_generated.event, quotation_generated.original_timestamp, quotation_generated.sent_at, quotation_generated."timestamp", quotation_generated.user_id, quotation_generated.context_library_name, quotation_generated.event_text, quotation_generated.quotation_id, quotation_generated.uuid_ts, quotation_generated.seller_id, row_number() OVER (PARTITION BY quotation_generated.user_id ORDER BY quotation_generated.received_at) AS quot_order FROM api_sap_prd.quotation_generated) quot_ordered ON p_1.user_id = quot_ordered.user_id WHERE quot_ordered.quot_order = 1 GROUP BY p_1.user_id, quot_ordered.seller_id ) SELECT p.anon_id, p.pageview_date, p.user_id, p.purchase_date, p.quotation_id, p.coupon, p.seller_id, p.utm_source, p.utm_medium, p.utm_content, p.campaign_name, p.ad_name, p.ad_name_group, p.ad_name_camp, p.page_url, p.page_path, p.referrer, p.pageview_order, p.rn, t.lia_touch, t.executive_touch, t.inside_touch, fq.first_quotation_by, CASE WHEN p.seller_id = ANY (ARRAY[16::bigint, 19::bigint]) THEN 'LIA'::text WHEN p.seller_id = ANY (ARRAY[47197::bigint, 47195::bigint, 47218::bigint, 47854::bigint, 47211::bigint, 47250::bigint, 47849::bigint, 47385::bigint, 47200::bigint, 47192::bigint, 47205::bigint, 47850::bigint, 47223::bigint, 47165::bigint, 47374::bigint, 47368::bigint, 47194::bigint, 47206::bigint, 47236::bigint, 43925::bigint, 47225::bigint, 47388::bigint, 47202::bigint, 47393::bigint, 47199::bigint, 47193::bigint, 47162::bigint, 47198::bigint, 47259::bigint, 47378::bigint, 47262::bigint, 47185::bigint, 47365::bigint, 47163::bigint, 47853::bigint, 47381::bigint, 47164::bigint, 47190::bigint, 47203::bigint, 43926::bigint, 47851::bigint, 49444::bigint, 49442::bigint, 49443::bigint, 49445::bigint, 49476::bigint, 49525::bigint, 49524::bigint, 49815::bigint, 49816::bigint, 49817::bigint, 49818::bigint, 49861::bigint]) THEN 'INSIDE'::text ELSE 'Executivo'::text END AS seller_name FROM firstclick p JOIN touches t ON p.user_id = t.user_id JOIN first_quot fq ON p.user_id = fq.user_id`
+);
+
+export const purchasesPageviewsLastclick = pgMaterializedView(
+  "purchases_pageviews_lastclick",
+  {
+    anonId: text("anon_id"),
+    pageviewDate: timestamp("pageview_date", { mode: "string" }),
+    userId: text("user_id"),
+    purchaseDate: timestamp("purchase_date", { mode: "string" }),
+    quotationId: text("quotation_id"),
+    coupon: text(),
+    // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+    sellerId: bigint("seller_id", { mode: "number" }),
+    utmSource: text("utm_source"),
+    utmMedium: text("utm_medium"),
+    utmContent: text("utm_content"),
+    campaignName: text("campaign_name"),
+    adName: text("ad_name"),
+    adNameGroup: text("ad_name_group"),
+    adNameCamp: text("ad_name_camp"),
+    pageUrl: text("page_url"),
+    pagePath: text("page_path"),
+    referrer: text(),
+    // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+    pageviewOrder: bigint("pageview_order", { mode: "number" }),
+    // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+    reversePageviewOrder: bigint("reverse_pageview_order", { mode: "number" }),
+    liaTouch: integer("lia_touch"),
+    executiveTouch: integer("executive_touch"),
+    insideTouch: integer("inside_touch"),
+    firstQuotationBy: text("first_quotation_by"),
+    sellerName: text("seller_name"),
+  }
+).as(
+  sql`WITH ranked_pageviews AS ( SELECT mat_purchases_pageviews.anon_id, mat_purchases_pageviews.pageview_date, mat_purchases_pageviews.user_id, mat_purchases_pageviews.purchase_date, mat_purchases_pageviews.quotation_id, mat_purchases_pageviews.coupon, mat_purchases_pageviews.seller_id, mat_purchases_pageviews.utm_source, mat_purchases_pageviews.utm_medium, mat_purchases_pageviews.utm_content, mat_purchases_pageviews.campaign_name, mat_purchases_pageviews.ad_name, mat_purchases_pageviews.ad_name_group, mat_purchases_pageviews.ad_name_camp, mat_purchases_pageviews.page_url, mat_purchases_pageviews.page_path, mat_purchases_pageviews.referrer, mat_purchases_pageviews.pageview_order, row_number() OVER (PARTITION BY mat_purchases_pageviews.user_id ORDER BY mat_purchases_pageviews.pageview_order DESC) AS reverse_pageview_order FROM mat_purchases_pageviews WHERE mat_purchases_pageviews.pageview_date < mat_purchases_pageviews.purchase_date AND (mat_purchases_pageviews.utm_source IS NOT NULL OR mat_purchases_pageviews.utm_medium IS NOT NULL OR mat_purchases_pageviews.campaign_name IS NOT NULL OR mat_purchases_pageviews.ad_name IS NOT NULL) ), lastclick AS ( SELECT ranked_pageviews.anon_id, ranked_pageviews.pageview_date, ranked_pageviews.user_id, ranked_pageviews.purchase_date, ranked_pageviews.quotation_id, ranked_pageviews.coupon, ranked_pageviews.seller_id, ranked_pageviews.utm_source, ranked_pageviews.utm_medium, ranked_pageviews.utm_content, ranked_pageviews.campaign_name, ranked_pageviews.ad_name, ranked_pageviews.ad_name_group, ranked_pageviews.ad_name_camp, ranked_pageviews.page_url, ranked_pageviews.page_path, ranked_pageviews.referrer, ranked_pageviews.pageview_order, ranked_pageviews.reverse_pageview_order FROM ranked_pageviews WHERE ranked_pageviews.reverse_pageview_order = 1 ), touches AS ( SELECT p_1.user_id, max( CASE WHEN q.seller_id = ANY (ARRAY[16::bigint, 19::bigint]) THEN 1 ELSE 0 END) AS lia_touch, max( CASE WHEN q.seller_id <> ALL (ARRAY[16::bigint, 19::bigint, 47197::bigint, 47195::bigint, 47218::bigint, 47854::bigint, 47211::bigint, 47250::bigint, 47849::bigint, 47385::bigint, 47200::bigint, 47192::bigint, 47204::bigint, 47205::bigint, 47850::bigint, 47223::bigint, 47165::bigint, 47374::bigint, 47368::bigint, 47194::bigint, 47236::bigint, 43925::bigint, 47225::bigint, 47388::bigint, 47202::bigint, 47393::bigint, 47199::bigint, 47193::bigint, 47162::bigint, 47852::bigint, 47198::bigint, 47259::bigint, 47378::bigint, 47262::bigint, 47185::bigint, 47365::bigint, 47182::bigint, 47383::bigint, 47853::bigint, 47381::bigint, 47164::bigint, 47190::bigint, 47857::bigint, 47203::bigint, 43926::bigint, 47851::bigint]) THEN 1 ELSE 0 END) AS executive_touch, max( CASE WHEN q.seller_id = ANY (ARRAY[47197::bigint, 47195::bigint, 47218::bigint, 47854::bigint, 47211::bigint, 47250::bigint, 47849::bigint, 47385::bigint, 47200::bigint, 47192::bigint, 47204::bigint, 47205::bigint, 47850::bigint, 47223::bigint, 47165::bigint, 47374::bigint, 47368::bigint, 47194::bigint, 47236::bigint, 43925::bigint, 47225::bigint, 47388::bigint, 47202::bigint, 47393::bigint, 47199::bigint, 47193::bigint, 47162::bigint, 47852::bigint, 47198::bigint, 47259::bigint, 47378::bigint, 47262::bigint, 47185::bigint, 47365::bigint, 47182::bigint, 47383::bigint, 47853::bigint, 47381::bigint, 47164::bigint, 47190::bigint, 47857::bigint, 47203::bigint, 43926::bigint, 47851::bigint]) THEN 1 ELSE 0 END) AS inside_touch FROM lastclick p_1 JOIN api_sap_prd.quotation_generated q ON p_1.user_id = q.user_id GROUP BY p_1.user_id ), first_quot AS ( SELECT p_1.user_id, CASE WHEN quot_ordered.seller_id = ANY (ARRAY[16::bigint, 19::bigint]) THEN 'LIA'::text WHEN quot_ordered.seller_id = ANY (ARRAY[47197::bigint, 47195::bigint, 47218::bigint, 47854::bigint, 47211::bigint, 47250::bigint, 47849::bigint, 47385::bigint, 47200::bigint, 47192::bigint, 47204::bigint, 47205::bigint, 47850::bigint, 47223::bigint, 47165::bigint, 47374::bigint, 47368::bigint, 47194::bigint, 47236::bigint, 43925::bigint, 47225::bigint, 47388::bigint, 47202::bigint, 47393::bigint, 47199::bigint, 47193::bigint, 47162::bigint, 47852::bigint, 47198::bigint, 47259::bigint, 47378::bigint, 47262::bigint, 47185::bigint, 47365::bigint, 47182::bigint, 47383::bigint, 47853::bigint, 47381::bigint, 47164::bigint, 47190::bigint, 47857::bigint, 47203::bigint, 43926::bigint, 47851::bigint]) THEN 'INSIDE'::text ELSE 'Executivo'::text END AS first_quotation_by FROM lastclick p_1 JOIN ( SELECT quotation_generated.id, quotation_generated.received_at, quotation_generated.context_library_version, quotation_generated.event, quotation_generated.original_timestamp, quotation_generated.sent_at, quotation_generated."timestamp", quotation_generated.user_id, quotation_generated.context_library_name, quotation_generated.event_text, quotation_generated.quotation_id, quotation_generated.uuid_ts, quotation_generated.seller_id, row_number() OVER (PARTITION BY quotation_generated.user_id ORDER BY quotation_generated.received_at) AS quot_order FROM api_sap_prd.quotation_generated) quot_ordered ON p_1.user_id = quot_ordered.user_id WHERE quot_ordered.quot_order = 1 GROUP BY p_1.user_id, quot_ordered.seller_id ) SELECT p.anon_id, p.pageview_date, p.user_id, p.purchase_date, p.quotation_id, p.coupon, p.seller_id, p.utm_source, p.utm_medium, p.utm_content, p.campaign_name, p.ad_name, p.ad_name_group, p.ad_name_camp, p.page_url, p.page_path, p.referrer, p.pageview_order, p.reverse_pageview_order, t.lia_touch, t.executive_touch, t.inside_touch, fq.first_quotation_by, CASE WHEN p.seller_id = ANY (ARRAY[16::bigint, 19::bigint]) THEN 'LIA'::text WHEN p.seller_id = ANY (ARRAY[47197::bigint, 47195::bigint, 47218::bigint, 47854::bigint, 47211::bigint, 47250::bigint, 47849::bigint, 47385::bigint, 47200::bigint, 47192::bigint, 47204::bigint, 47205::bigint, 47850::bigint, 47223::bigint, 47165::bigint, 47374::bigint, 47368::bigint, 47194::bigint, 47236::bigint, 43925::bigint, 47225::bigint, 47388::bigint, 47202::bigint, 47393::bigint, 47199::bigint, 47193::bigint, 47162::bigint, 47852::bigint, 47198::bigint, 47259::bigint, 47378::bigint, 47262::bigint, 47185::bigint, 47365::bigint, 47182::bigint, 47383::bigint, 47853::bigint, 47381::bigint, 47164::bigint, 47190::bigint, 47857::bigint, 47203::bigint, 43926::bigint, 47851::bigint]) THEN 'INSIDE'::text ELSE 'Executivo'::text END AS seller_name FROM lastclick p JOIN touches t ON p.user_id = t.user_id JOIN first_quot fq ON p.user_id = fq.user_id`
+);
+
+export const purchasesTimeToBuy = pgMaterializedView("purchases_time_to_buy", {
+  userId: text("user_id"),
+  anonId: text("anon_id"),
+  quotationId: text("quotation_id"),
+  pageviewDate: date("pageview_date"),
+  purchaseDate: date("purchase_date"),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  sellerId: bigint("seller_id", { mode: "number" }),
+  sellerName: text("seller_name"),
+  firstSource: text("first_source"),
+  firstMedium: text("first_medium"),
+  firstAdName: text("first_ad_name"),
+  lastSource: text("last_source"),
+  lastMedium: text("last_medium"),
+  lastAdName: text("last_ad_name"),
+  coupon: text(),
+  value: numeric(),
+  discount: numeric(),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  registrationFee: bigint("registration_fee", { mode: "number" }),
+  executiveTouch: integer("executive_touch"),
+  liaTouch: integer("lia_touch"),
+  insideTouch: integer("inside_touch"),
+  firstQuotationBy: text("first_quotation_by"),
+  firstQuotationDate: date("first_quotation_date"),
+  diffSeconds: numeric("diff_seconds"),
+  diffDays: numeric("diff_days"),
+}).as(
+  sql`WITH firstclick_pageviews AS ( SELECT mat_purchases_pageviews.anon_id, mat_purchases_pageviews.pageview_date, mat_purchases_pageviews.user_id, mat_purchases_pageviews.purchase_date, mat_purchases_pageviews.quotation_id, mat_purchases_pageviews.coupon, mat_purchases_pageviews.seller_id, mat_purchases_pageviews.utm_source, mat_purchases_pageviews.utm_medium, mat_purchases_pageviews.utm_content, mat_purchases_pageviews.campaign_name, mat_purchases_pageviews.ad_name, mat_purchases_pageviews.ad_name_group, mat_purchases_pageviews.ad_name_camp, mat_purchases_pageviews.page_url, mat_purchases_pageviews.page_path, mat_purchases_pageviews.referrer, mat_purchases_pageviews.pageview_order, row_number() OVER (PARTITION BY mat_purchases_pageviews.user_id ORDER BY mat_purchases_pageviews.pageview_date) AS rn FROM mat_purchases_pageviews ), firstclick AS ( SELECT firstclick_pageviews.anon_id, firstclick_pageviews.pageview_date, firstclick_pageviews.user_id, firstclick_pageviews.purchase_date, firstclick_pageviews.quotation_id, firstclick_pageviews.coupon, firstclick_pageviews.seller_id, firstclick_pageviews.utm_source, firstclick_pageviews.utm_medium, firstclick_pageviews.utm_content, firstclick_pageviews.campaign_name, firstclick_pageviews.ad_name, firstclick_pageviews.ad_name_group, firstclick_pageviews.ad_name_camp, firstclick_pageviews.page_url, firstclick_pageviews.page_path, firstclick_pageviews.referrer, firstclick_pageviews.pageview_order, firstclick_pageviews.rn FROM firstclick_pageviews WHERE firstclick_pageviews.rn = 1 ), diff_in_seconds AS ( SELECT p_1.anon_id, p_1.pageview_date, p_1.user_id, p_1.purchase_date, p_1.quotation_id, p_1.coupon, p_1.seller_id, p_1.utm_source, p_1.utm_medium, p_1.utm_content, p_1.campaign_name, p_1.ad_name, p_1.ad_name_group, p_1.ad_name_camp, p_1.page_url, p_1.page_path, p_1.referrer, p_1.pageview_order, p_1.rn, p_1.purchase_date - p_1.pageview_date AS diff FROM firstclick p_1 WHERE p_1.pageview_date < p_1.purchase_date ), ranked_pageviews AS ( SELECT mat_purchases_pageviews.anon_id, mat_purchases_pageviews.pageview_date, mat_purchases_pageviews.user_id, mat_purchases_pageviews.purchase_date, mat_purchases_pageviews.quotation_id, mat_purchases_pageviews.coupon, mat_purchases_pageviews.seller_id, mat_purchases_pageviews.utm_source, mat_purchases_pageviews.utm_medium, mat_purchases_pageviews.utm_content, mat_purchases_pageviews.campaign_name, mat_purchases_pageviews.ad_name, mat_purchases_pageviews.ad_name_group, mat_purchases_pageviews.ad_name_camp, mat_purchases_pageviews.page_url, mat_purchases_pageviews.page_path, mat_purchases_pageviews.referrer, mat_purchases_pageviews.pageview_order, row_number() OVER (PARTITION BY mat_purchases_pageviews.user_id ORDER BY mat_purchases_pageviews.pageview_order DESC) AS reverse_pageview_order FROM mat_purchases_pageviews ), last_pageviews AS ( SELECT ranked_pageviews.anon_id, ranked_pageviews.pageview_date, ranked_pageviews.user_id, ranked_pageviews.purchase_date, ranked_pageviews.quotation_id, ranked_pageviews.coupon, ranked_pageviews.seller_id, ranked_pageviews.utm_source, ranked_pageviews.utm_medium, ranked_pageviews.utm_content, ranked_pageviews.campaign_name, ranked_pageviews.ad_name, ranked_pageviews.ad_name_group, ranked_pageviews.ad_name_camp, ranked_pageviews.page_url, ranked_pageviews.page_path, ranked_pageviews.referrer, ranked_pageviews.pageview_order, ranked_pageviews.reverse_pageview_order FROM ranked_pageviews WHERE ranked_pageviews.reverse_pageview_order = 1 ) SELECT p.user_id, dif.anon_id, p.quotation_id, date(dif.pageview_date) AS pageview_date, date(p.received_at) AS purchase_date, p.seller_id, p.seller_name, dif.utm_source AS first_source, dif.utm_medium AS first_medium, dif.ad_name_camp AS first_ad_name, COALESCE(lp.utm_source, dif.utm_source) AS last_source, COALESCE(lp.utm_medium, dif.utm_medium) AS last_medium, COALESCE(lp.ad_name_camp, dif.ad_name_camp) AS last_ad_name, p.coupon, p.value, q.discount, q.registration_fee, p.executive_touch, p.lia_touch, p.inside_touch, p.first_quotation_by, p.first_quotation_date, max(floor(EXTRACT(epoch FROM dif.diff))) AS diff_seconds, max(GREATEST(floor(EXTRACT(epoch FROM dif.diff) / 60::numeric / 60::numeric / 24::numeric), floor(EXTRACT(epoch FROM p.received_at - p.first_quotation_date::timestamp without time zone) / 60::numeric / 60::numeric / 24::numeric))) AS diff_days FROM purchases p LEFT JOIN last_pageviews lp ON p.user_id = lp.user_id LEFT JOIN diff_in_seconds dif ON p.user_id = dif.user_id LEFT JOIN n8n_quotation_info.quotation_info q ON q.quotation_id = p.quotation_id GROUP BY p.user_id, dif.anon_id, p.quotation_id, (date(dif.pageview_date)), (date(p.received_at)), p.seller_id, p.seller_name, dif.utm_source, dif.utm_medium, dif.ad_name_camp, (COALESCE(lp.utm_source, dif.utm_source)), (COALESCE(lp.utm_medium, dif.utm_medium)), (COALESCE(lp.ad_name_camp, dif.ad_name_camp)), p.coupon, p.value, q.discount, q.registration_fee, p.executive_touch, p.lia_touch, p.inside_touch, p.first_quotation_by, p.first_quotation_date`
+);
+
+export const iaProposalGenStart = pgView("ia_proposal_gen_start", {
+  receivedAt: date("received_at"),
+  cep: text(),
+  plate: text(),
+  vehicleType: text("vehicle_type"),
+  fipe: text(),
+  coupon: text(),
+}).as(
+  sql`SELECT date(received_at) AS received_at, cep, plate, vehicle_type, fipe, coupon FROM lia_analytics_prd.generate_proposal_start GROUP BY (date(received_at)), cep, plate, vehicle_type, fipe, coupon ORDER BY (date(received_at)) DESC`
+);
+
+export const iaProposalGenError = pgView("ia_proposal_gen_error", {
+  receivedAt: date("received_at"),
+  cep: text(),
+  vehicleType: text("vehicle_type"),
+  fipe: text(),
+}).as(
+  sql`SELECT date(received_at) AS received_at, cep, vehicle_type, fipe FROM lia_analytics_prd.generate_proposal_error GROUP BY (date(received_at)), cep, vehicle_type, fipe ORDER BY (date(received_at)) DESC`
+);
+
+export const iaProposalGenSuccess = pgView("ia_proposal_gen_success", {
+  receivedAt: date("received_at"),
+  cep: text(),
+  vehicleType: text("vehicle_type"),
+  fipe: text(),
+  plate: text(),
+  coupon: text(),
+}).as(
+  sql`SELECT date(received_at) AS received_at, cep, vehicle_type, fipe, plate, coupon FROM lia_analytics_prd.generate_proposal_success GROUP BY (date(received_at)), cep, vehicle_type, fipe, plate, coupon ORDER BY (date(received_at)) DESC`
+);
+
+export const iaQuotationGenStart = pgView("ia_quotation_gen_start", {
+  receivedAt: date("received_at"),
+  additionalGlass: boolean("additional_glass"),
+  coupon: text(),
+  cep: text(),
+  userId: text("user_id"),
+  additionalCollision: boolean("additional_collision"),
+  isServiceVehicle: boolean("is_service_vehicle"),
+  fipe: text(),
+  vehicleType: text("vehicle_type"),
+}).as(
+  sql`SELECT date(received_at) AS received_at, additional_glass, CASE WHEN coupon ~ similar_to_escape('[0-9]{1}[A-Z0-9]{3}'::text) OR coupon ~ similar_to_escape('[A-Z]{1}[0-9]{1}[A-Z0-9]{2}'::text) THEN 'INDICACAO'::text ELSE (regexp_match(coupon, '(.+)_.+'::text))[1] END AS coupon, cep, user_id, additional_collision, is_service_vehicle, fipe, vehicle_type FROM lia_analytics_prd.generate_quotation_start GROUP BY (date(received_at)), additional_glass, ( CASE WHEN coupon ~ similar_to_escape('[0-9]{1}[A-Z0-9]{3}'::text) OR coupon ~ similar_to_escape('[A-Z]{1}[0-9]{1}[A-Z0-9]{2}'::text) THEN 'INDICACAO'::text ELSE (regexp_match(coupon, '(.+)_.+'::text))[1] END), cep, user_id, additional_collision, is_service_vehicle, fipe, vehicle_type ORDER BY (date(received_at)) DESC`
+);
+
+export const iaQuotationGenError = pgView("ia_quotation_gen_error", {
+  receivedAt: date("received_at"),
+  additionalGlass: boolean("additional_glass"),
+  coupon: text(),
+  cep: text(),
+  userId: text("user_id"),
+  additionalCollision: boolean("additional_collision"),
+  isServiceVehicle: boolean("is_service_vehicle"),
+  fipe: text(),
+  vehicleType: text("vehicle_type"),
+}).as(
+  sql`SELECT date(received_at) AS received_at, additional_glass, CASE WHEN coupon ~ similar_to_escape('[0-9]{1}[A-Z0-9]{3}'::text) OR coupon ~ similar_to_escape('[A-Z]{1}[0-9]{1}[A-Z0-9]{2}'::text) THEN 'INDICACAO'::text ELSE (regexp_match(coupon, '(.+)_.+'::text))[1] END AS coupon, cep, user_id, additional_collision, is_service_vehicle, fipe, vehicle_type FROM lia_analytics_prd.generate_quotation_error GROUP BY (date(received_at)), additional_glass, ( CASE WHEN coupon ~ similar_to_escape('[0-9]{1}[A-Z0-9]{3}'::text) OR coupon ~ similar_to_escape('[A-Z]{1}[0-9]{1}[A-Z0-9]{2}'::text) THEN 'INDICACAO'::text ELSE (regexp_match(coupon, '(.+)_.+'::text))[1] END), cep, user_id, additional_collision, is_service_vehicle, fipe, vehicle_type ORDER BY (date(received_at)) DESC`
+);
+
+export const iaQuotationGenSuccess = pgView("ia_quotation_gen_success", {
+  receivedAt: date("received_at"),
+  userId: text("user_id"),
+  quotationId: text("quotation_id"),
+  price: numeric(),
+  priceWithoutDiscount: numeric("price_without_discount"),
+  registrationFee: numeric("registration_fee"),
+  discount: numeric(),
+}).as(
+  sql`SELECT date(received_at) AS received_at, user_id, quotation_id, price, price_without_discount, registration_fee, discount FROM lia_analytics_prd.generate_quotation_success GROUP BY (date(received_at)), user_id, quotation_id, price, price_without_discount, registration_fee, discount ORDER BY (date(received_at)) DESC`
+);
+
+export const iaHelpUser = pgView("ia_help_user", {
+  receivedAt: date("received_at"),
+  rag: boolean(),
+  threadId: text("thread_id"),
+  agentResponse: text("agent_response"),
+  userMessage: text("user_message"),
+  eventText: text("event_text"),
+  phone: text(),
+}).as(
+  sql`SELECT date(received_at) AS received_at, rag, thread_id, agent_response, user_message, event_text, phone FROM lia_analytics_prd.help_user_response ORDER BY (date(received_at)) DESC`
+);
+
+export const iaHumanTransfer = pgView("ia_human_transfer", {
+  receivedAt: date("received_at"),
+  phone: text(),
+  threadId: text("thread_id"),
+}).as(
+  sql`SELECT date(received_at) AS received_at, phone, thread_id FROM lia_analytics_prd.human_support_transfer GROUP BY (date(received_at)), phone, thread_id ORDER BY (date(received_at)) DESC`
+);
+
+export const iaModerationFlagged = pgView("ia_moderation_flagged", {
+  receivedAt: date("received_at"),
+  phone: text(),
+  threadId: text("thread_id"),
+  message: text(),
+}).as(
+  sql`SELECT date(received_at) AS received_at, phone, thread_id, message FROM lia_analytics_prd.moderation_flagged GROUP BY (date(received_at)), phone, thread_id, message ORDER BY (date(received_at)) DESC`
+);
+
+export const mvPurchaseFirstPurchase = pgMaterializedView(
+  "mv_purchase_first_purchase",
+  {
+    userId: text("user_id"),
+    purchasedAt: timestamp("purchased_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    purchaseId: varchar("purchase_id", { length: 1024 }),
+    coupon: text(),
+    // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+    sellerId: bigint("seller_id", { mode: "number" }),
+    sellerName: text("seller_name"),
+    paymentType: text("payment_type"),
+    purchaseValue: numeric("purchase_value"),
+    contextIp: text("context_ip"),
+    purchaseDate: date("purchase_date"),
+  }
+).as(
+  sql`WITH params AS ( SELECT now() - '6 mons'::interval AS window_start ), raw AS ( SELECT p.user_id, p.received_at AS purchased_at, p.id AS purchase_id, p.coupon, p.seller_id, CASE WHEN p.seller_id = ANY (ARRAY[16::bigint, 19::bigint]) THEN 'LIA'::text WHEN p.seller_id = ANY (ARRAY[47197::bigint, 47195::bigint, 47218::bigint, 47854::bigint, 47211::bigint, 47250::bigint, 47849::bigint, 47385::bigint, 47200::bigint, 47192::bigint, 47205::bigint, 47850::bigint, 47223::bigint, 47165::bigint, 47374::bigint, 47368::bigint, 47194::bigint, 47206::bigint, 47236::bigint, 43925::bigint, 47225::bigint, 47388::bigint, 47202::bigint, 47393::bigint, 47199::bigint, 47193::bigint, 47162::bigint, 47198::bigint, 47259::bigint, 47378::bigint, 47262::bigint, 47185::bigint, 47365::bigint, 47163::bigint, 47853::bigint, 47381::bigint, 47164::bigint, 47190::bigint, 47203::bigint, 43926::bigint, 47851::bigint, 49444::bigint, 49442::bigint, 49443::bigint, 49445::bigint, 49476::bigint, 49525::bigint, 49524::bigint, 49815::bigint, 49816::bigint, 49817::bigint, 49818::bigint, 49861::bigint]) THEN 'INSIDE'::text ELSE 'Executivo'::text END AS seller_name, p.payment_type, p.value AS purchase_value, p.context_ip FROM api_sap_prd.purchased p CROSS JOIN params WHERE p.user_id IS NOT NULL AND p.received_at >= params.window_start ), ranked AS ( SELECT r.user_id, r.purchased_at, r.purchase_id, r.coupon, r.seller_id, r.seller_name, r.payment_type, r.purchase_value, r.context_ip, row_number() OVER (PARTITION BY r.user_id ORDER BY r.purchased_at) AS purchase_rank FROM raw r ) SELECT user_id, purchased_at, purchase_id, coupon, seller_id, seller_name, payment_type, purchase_value, context_ip, purchased_at::date AS purchase_date FROM ranked WHERE purchase_rank = 1`
+);
+
+export const funnelDaily = pgMaterializedView("funnel_daily", {
+  stepDate: date("step_date"),
+  stepOrder: integer("step_order"),
+  stepName: text("step_name"),
+  adName: text("ad_name"),
+  adNameGroup: text("ad_name_group"),
+  adNameCamp: text("ad_name_camp"),
+  coupon: text(),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  sellerId: bigint("seller_id", { mode: "number" }),
+  sellerName: text("seller_name"),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  userCount: bigint("user_count", { mode: "number" }),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  purchaseCount: bigint("purchase_count", { mode: "number" }),
+}).as(
+  sql`WITH vars AS ( SELECT date_trunc('day'::text, now() - '6 mons'::interval) AS cutoff_time ), filtered_events AS ( SELECT fe.user_key, fe.step_order, fe.step_name, fe.event_time, fe.event_id FROM funnel_events fe JOIN vars v ON fe.event_time >= v.cutoff_time ), step_events AS ( SELECT filtered_events.user_key, filtered_events.step_order, filtered_events.step_name, min(filtered_events.event_time) AS first_time FROM filtered_events GROUP BY filtered_events.user_key, filtered_events.step_order, filtered_events.step_name ), user_paths AS ( SELECT step_events.user_key, min( CASE WHEN step_events.step_order = 1 THEN step_events.first_time ELSE NULL::timestamp with time zone END) AS pages_time, min( CASE WHEN step_events.step_order = 2 THEN step_events.first_time ELSE NULL::timestamp with time zone END) AS lead_time, min( CASE WHEN step_events.step_order = 3 THEN step_events.first_time ELSE NULL::timestamp with time zone END) AS lead_vehicle_time, min( CASE WHEN step_events.step_order = 4 THEN step_events.first_time ELSE NULL::timestamp with time zone END) AS lead_address_time, min( CASE WHEN step_events.step_order = 5 THEN step_events.first_time ELSE NULL::timestamp with time zone END) AS quotation_viewed_time, min( CASE WHEN step_events.step_order = 6 THEN step_events.first_time ELSE NULL::timestamp with time zone END) AS payment_info_added_time, min( CASE WHEN step_events.step_order = 7 THEN step_events.first_time ELSE NULL::timestamp with time zone END) AS purchased_time FROM step_events GROUP BY step_events.user_key HAVING min( CASE WHEN step_events.step_order = 1 THEN step_events.first_time ELSE NULL::timestamp with time zone END) IS NOT NULL ), flags AS ( SELECT user_paths.user_key, user_paths.pages_time, user_paths.lead_time, user_paths.lead_vehicle_time, user_paths.lead_address_time, user_paths.quotation_viewed_time, user_paths.payment_info_added_time, user_paths.purchased_time, true AS reached_pages, user_paths.lead_time IS NOT NULL AND user_paths.lead_time >= user_paths.pages_time AS reached_lead, user_paths.lead_vehicle_time IS NOT NULL AND user_paths.lead_time IS NOT NULL AND user_paths.lead_time >= user_paths.pages_time AND user_paths.lead_vehicle_time >= user_paths.lead_time AS reached_lead_vehicle, user_paths.lead_address_time IS NOT NULL AND user_paths.lead_vehicle_time IS NOT NULL AND user_paths.lead_time IS NOT NULL AND user_paths.lead_time >= user_paths.pages_time AND user_paths.lead_vehicle_time >= user_paths.lead_time AND user_paths.lead_address_time >= user_paths.lead_vehicle_time AS reached_lead_address, user_paths.quotation_viewed_time IS NOT NULL AND user_paths.lead_address_time IS NOT NULL AND user_paths.lead_vehicle_time IS NOT NULL AND user_paths.lead_time IS NOT NULL AND user_paths.lead_time >= user_paths.pages_time AND user_paths.lead_vehicle_time >= user_paths.lead_time AND user_paths.lead_address_time >= user_paths.lead_vehicle_time AND user_paths.quotation_viewed_time >= user_paths.lead_address_time AS reached_quotation_viewed, user_paths.payment_info_added_time IS NOT NULL AND user_paths.quotation_viewed_time IS NOT NULL AND user_paths.lead_address_time IS NOT NULL AND user_paths.lead_vehicle_time IS NOT NULL AND user_paths.lead_time IS NOT NULL AND user_paths.lead_time >= user_paths.pages_time AND user_paths.lead_vehicle_time >= user_paths.lead_time AND user_paths.lead_address_time >= user_paths.lead_vehicle_time AND user_paths.quotation_viewed_time >= user_paths.lead_address_time AND user_paths.payment_info_added_time >= user_paths.quotation_viewed_time AS reached_payment_info_added, user_paths.purchased_time IS NOT NULL AND user_paths.payment_info_added_time IS NOT NULL AND user_paths.quotation_viewed_time IS NOT NULL AND user_paths.lead_address_time IS NOT NULL AND user_paths.lead_vehicle_time IS NOT NULL AND user_paths.lead_time IS NOT NULL AND user_paths.lead_time >= user_paths.pages_time AND user_paths.lead_vehicle_time >= user_paths.lead_time AND user_paths.lead_address_time >= user_paths.lead_vehicle_time AND user_paths.quotation_viewed_time >= user_paths.lead_address_time AND user_paths.payment_info_added_time >= user_paths.quotation_viewed_time AND user_paths.purchased_time >= user_paths.payment_info_added_time AS reached_purchased FROM user_paths ), campaign_sources AS ( SELECT COALESCE(p.user_id, ib.resolved_user_id, p.anonymous_id) AS user_key, p.received_at, p.context_campaign_name FROM js_aquisicao_prd.pages p LEFT JOIN identity_bridge ib ON p.anonymous_id = ib.anonymous_id CROSS JOIN vars v WHERE p.received_at >= v.cutoff_time AND COALESCE(p.user_id, ib.resolved_user_id, p.anonymous_id) IS NOT NULL AND p.context_campaign_name IS NOT NULL AND btrim(p.context_campaign_name) <> ''::text ), campaign_ranked AS ( SELECT campaign_sources.user_key, campaign_sources.context_campaign_name, row_number() OVER (PARTITION BY campaign_sources.user_key ORDER BY campaign_sources.received_at) AS rn FROM campaign_sources ), campaign_attribution AS ( SELECT campaign_ranked.user_key, (regexp_match(campaign_ranked.context_campaign_name, '.+\|.+\|(.+)'::text))[1] AS ad_name, (regexp_match(campaign_ranked.context_campaign_name, '.+\|.+\|([a-zA-Z]+[0-9]+)'::text))[1] AS ad_name_group, (regexp_match(campaign_ranked.context_campaign_name, '.+\|.+\|([a-zA-Z]+)[0-9]+'::text))[1] AS ad_name_camp FROM campaign_ranked WHERE campaign_ranked.rn = 1 ), quotation_attrs AS ( SELECT COALESCE(q.user_id, ib.resolved_user_id, q.anonymous_id) AS user_key, q.received_at, q.coupon, q.seller_id FROM js_aquisicao_prd.quotation_viewed q LEFT JOIN identity_bridge ib ON q.anonymous_id = ib.anonymous_id CROSS JOIN vars v WHERE q.received_at >= v.cutoff_time AND COALESCE(q.user_id, ib.resolved_user_id, q.anonymous_id) IS NOT NULL ), purchased_attrs AS ( SELECT p.user_id AS user_key, p.received_at, p.coupon, p.seller_id FROM api_sap_prd.purchased p CROSS JOIN vars v WHERE p.received_at >= v.cutoff_time AND p.user_id IS NOT NULL ), attr_union AS ( SELECT purchased_attrs.user_key, purchased_attrs.coupon, purchased_attrs.seller_id, purchased_attrs.received_at, 0 AS priority FROM purchased_attrs UNION ALL SELECT quotation_attrs.user_key, quotation_attrs.coupon, quotation_attrs.seller_id, quotation_attrs.received_at, 1 AS priority FROM quotation_attrs ), attr_ranked AS ( SELECT attr_union.user_key, attr_union.coupon, attr_union.seller_id, row_number() OVER (PARTITION BY attr_union.user_key ORDER BY attr_union.priority, attr_union.received_at) AS rn FROM attr_union WHERE attr_union.coupon IS NOT NULL OR attr_union.seller_id IS NOT NULL ), coupon_attribution AS ( SELECT attr_ranked.user_key, CASE WHEN attr_ranked.coupon IS NULL THEN NULL::text WHEN attr_ranked.coupon ~ '^[0-9][A-Z0-9]{3}$'::text OR attr_ranked.coupon ~ '^[A-Z][0-9][A-Z0-9]{2}$'::text THEN 'INDICACAO'::text ELSE COALESCE((regexp_match(attr_ranked.coupon, '(.+)*.+'::text))[1], attr_ranked.coupon) END AS coupon_label, attr_ranked.seller_id FROM attr_ranked WHERE attr_ranked.rn = 1 ), coupon_enriched AS ( SELECT coupon_attribution.user_key, coupon_attribution.coupon_label AS coupon, coupon_attribution.seller_id, CASE WHEN coupon_attribution.seller_id = ANY (ARRAY[16::bigint, 19::bigint]) THEN 'LIA'::text WHEN coupon_attribution.seller_id = ANY (ARRAY[47197::bigint, 47195::bigint, 47218::bigint, 47854::bigint, 47211::bigint, 47250::bigint, 47849::bigint, 47385::bigint, 47200::bigint, 47192::bigint, 47205::bigint, 47850::bigint, 47223::bigint, 47165::bigint, 47374::bigint, 47368::bigint, 47194::bigint, 47206::bigint, 47236::bigint, 43925::bigint, 47225::bigint, 47388::bigint, 47202::bigint, 47393::bigint, 47199::bigint, 47193::bigint, 47162::bigint, 47198::bigint, 47259::bigint, 47378::bigint, 47262::bigint, 47185::bigint, 47365::bigint, 47163::bigint, 47853::bigint, 47381::bigint, 47164::bigint, 47190::bigint, 47203::bigint, 43926::bigint, 47851::bigint, 49444::bigint, 49442::bigint, 49443::bigint, 49445::bigint, 49476::bigint, 49525::bigint, 49524::bigint, 49815::bigint, 49816::bigint, 49817::bigint, 49818::bigint, 49861::bigint]) THEN 'INSIDE'::text WHEN coupon_attribution.seller_id IS NULL THEN NULL::text ELSE 'Executivo'::text END AS seller_name FROM coupon_attribution ), user_attributes AS ( SELECT f.user_key, ca.ad_name, ca.ad_name_group, ca.ad_name_camp, ce.coupon, ce.seller_id, ce.seller_name FROM flags f LEFT JOIN campaign_attribution ca ON ca.user_key = f.user_key LEFT JOIN coupon_enriched ce ON ce.user_key = f.user_key ), user_steps AS ( SELECT f.user_key, 1 AS step_order, 'pages'::text AS step_name, f.pages_time::date AS step_date FROM flags f UNION ALL SELECT f.user_key, 2, 'lead'::text, f.lead_time::date AS lead_time FROM flags f WHERE f.reached_lead UNION ALL SELECT f.user_key, 3, 'lead_vehicle'::text, f.lead_vehicle_time::date AS lead_vehicle_time FROM flags f WHERE f.reached_lead_vehicle UNION ALL SELECT f.user_key, 4, 'lead_address'::text, f.lead_address_time::date AS lead_address_time FROM flags f WHERE f.reached_lead_address UNION ALL SELECT f.user_key, 5, 'quotation_viewed'::text, f.quotation_viewed_time::date AS quotation_viewed_time FROM flags f WHERE f.reached_quotation_viewed UNION ALL SELECT f.user_key, 6, 'payment_info_added'::text, f.payment_info_added_time::date AS payment_info_added_time FROM flags f WHERE f.reached_payment_info_added UNION ALL SELECT f.user_key, 7, 'purchased'::text, f.purchased_time::date AS purchased_time FROM flags f WHERE f.reached_purchased ), daily_users AS ( SELECT us.step_date, us.step_order, us.step_name, ua.ad_name, ua.ad_name_group, ua.ad_name_camp, ua.coupon, ua.seller_id, ua.seller_name, count(DISTINCT us.user_key) AS user_count FROM user_steps us LEFT JOIN user_attributes ua ON ua.user_key = us.user_key JOIN vars v ON us.step_date IS NOT NULL AND us.step_date >= v.cutoff_time::date GROUP BY us.step_date, us.step_order, us.step_name, ua.ad_name, ua.ad_name_group, ua.ad_name_camp, ua.coupon, ua.seller_id, ua.seller_name ), daily_purchases AS ( SELECT fe.event_time::date AS step_date, ua.ad_name, ua.ad_name_group, ua.ad_name_camp, ua.coupon, ua.seller_id, ua.seller_name, count(*) AS purchase_count FROM filtered_events fe JOIN flags f ON f.user_key = fe.user_key LEFT JOIN user_attributes ua ON ua.user_key = fe.user_key WHERE fe.step_order = 7 AND f.reached_purchased AND fe.event_time >= f.payment_info_added_time GROUP BY (fe.event_time::date), ua.ad_name, ua.ad_name_group, ua.ad_name_camp, ua.coupon, ua.seller_id, ua.seller_name ) SELECT du.step_date, du.step_order, du.step_name, du.ad_name, du.ad_name_group, du.ad_name_camp, du.coupon, du.seller_id, du.seller_name, du.user_count, CASE WHEN du.step_name = 'purchased'::text THEN COALESCE(dp.purchase_count, 0::bigint) ELSE NULL::bigint END AS purchase_count FROM daily_users du LEFT JOIN daily_purchases dp ON dp.step_date = du.step_date AND NOT dp.ad_name IS DISTINCT FROM du.ad_name AND NOT dp.ad_name_group IS DISTINCT FROM du.ad_name_group AND NOT dp.ad_name_camp IS DISTINCT FROM du.ad_name_camp AND NOT dp.coupon IS DISTINCT FROM du.coupon AND NOT dp.seller_id IS DISTINCT FROM du.seller_id AND NOT dp.seller_name IS DISTINCT FROM du.seller_name ORDER BY du.step_date, du.step_order, du.step_name, du.ad_name, du.ad_name_group, du.ad_name_camp, du.coupon, du.seller_id, du.seller_name`
+);
+
+export const mvPurchaseAcquisitionEvents = pgMaterializedView(
+  "mv_purchase_acquisition_events",
+  {
+    eventUserId: text("event_user_id"),
+    eventTime: timestamp("event_time", { withTimezone: true, mode: "string" }),
+    pageEventId: varchar("page_event_id", { length: 1024 }),
+    anonymousId: text("anonymous_id"),
+    contextIp: text("context_ip"),
+    contextCampaignName: text("context_campaign_name"),
+    contextCampaignContent: text("context_campaign_content"),
+    contextCampaignId: text("context_campaign_id"),
+    contextPagePath: text("context_page_path"),
+    contextPageUrl: text("context_page_url"),
+    contextPageReferrer: text("context_page_referrer"),
+    contextPageSearch: text("context_page_search"),
+    canonicalSource: text("canonical_source"),
+    canonicalMedium: text("canonical_medium"),
+    canonicalOrigin: text("canonical_origin"),
+  }
+).as(
+  sql`WITH params AS ( SELECT now() - '6 mons'::interval AS window_start ), page_events AS ( SELECT pg.id, pg.received_at, pg.user_id AS raw_user_id, pg.anonymous_id, NULLIF(btrim(pg.context_campaign_source), ''::text) AS utm_source, NULLIF(btrim(pg.context_campaign_medium), ''::text) AS utm_medium, NULLIF(btrim(pg.referrer), ''::text) AS referrer, pg.context_campaign_name, pg.context_campaign_content, pg.context_campaign_id, pg.context_page_path, pg.context_page_url, pg.context_page_referrer, pg.context_page_search, pg.context_ip FROM js_aquisicao_prd.pages pg CROSS JOIN params WHERE pg.received_at IS NOT NULL AND pg.received_at >= params.window_start ) SELECT COALESCE(page_events.raw_user_id, identity_bridge.resolved_user_id) AS event_user_id, page_events.received_at AS event_time, page_events.id AS page_event_id, page_events.anonymous_id, page_events.context_ip, page_events.context_campaign_name, page_events.context_campaign_content, page_events.context_campaign_id, page_events.context_page_path, page_events.context_page_url, page_events.context_page_referrer, page_events.context_page_search, page_events.canonical_source, page_events.canonical_medium, (page_events.canonical_source || '/'::text) || page_events.canonical_medium AS canonical_origin FROM ( SELECT pe.id, pe.received_at, pe.raw_user_id, pe.anonymous_id, pe.utm_source, pe.utm_medium, pe.referrer, pe.context_campaign_name, pe.context_campaign_content, pe.context_campaign_id, pe.context_page_path, pe.context_page_url, pe.context_page_referrer, pe.context_page_search, pe.context_ip, CASE WHEN pe.utm_source IS NULL AND pe.utm_medium IS NULL AND pe.referrer IS NOT NULL AND pe.referrer !~~* '%loovi.com.br%'::text THEN CASE WHEN pe.referrer ~~* '%google%'::text THEN 'google'::text WHEN pe.referrer ~~* '%bing%'::text THEN 'bing'::text WHEN pe.referrer ~~* '%instagram%'::text THEN 'instagram'::text WHEN pe.referrer ~~* '%meta%'::text THEN 'meta'::text WHEN pe.referrer ~~* '%facebook%'::text OR pe.referrer ~~* 'fb%'::text THEN 'meta'::text WHEN pe.referrer ~~* '%tiktok%'::text THEN 'tiktok'::text ELSE 'other'::text END WHEN pe.utm_source IS NULL AND (pe.referrer IS NULL OR pe.referrer ~~* '%loovi.com.br%'::text) THEN 'direct'::text ELSE COALESCE(pe.utm_source, 'direct'::text) END AS canonical_source, CASE WHEN pe.utm_source IS NULL AND pe.utm_medium IS NULL AND pe.referrer IS NOT NULL AND pe.referrer !~~* '%loovi.com.br%'::text THEN 'organic'::text WHEN pe.utm_source IS NULL AND (pe.referrer IS NULL OR pe.referrer ~~* '%loovi.com.br%'::text) THEN 'direct'::text ELSE COALESCE(pe.utm_medium, 'unspecified'::text) END AS canonical_medium FROM page_events pe) page_events LEFT JOIN identity_bridge ON page_events.anonymous_id = identity_bridge.anonymous_id WHERE COALESCE(page_events.raw_user_id, identity_bridge.resolved_user_id) IS NOT NULL`
+);
+
+export const mvPurchaseJourneySteps = pgMaterializedView(
+  "mv_purchase_journey_steps",
+  {
+    pathPrefix: text("path_prefix"),
+    pathWithNext: text("path_with_next"),
+    pathPrefixText: text("path_prefix_text"),
+    pathWithNextText: text("path_with_next_text"),
+    stepOrigin: text("step_origin"),
+    nextOrigin: text("next_origin"),
+    hopIndex: integer("hop_index"),
+    originCount: integer("origin_count"),
+    purchaseDate: date("purchase_date"),
+    coupon: text(),
+    // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+    sellerId: bigint("seller_id", { mode: "number" }),
+    sellerName: text("seller_name"),
+    paymentType: text("payment_type"),
+    firstOrigin: text("first_origin"),
+    firstSource: text("first_source"),
+    firstMedium: text("first_medium"),
+    lastOrigin: text("last_origin"),
+    lastSource: text("last_source"),
+    lastMedium: text("last_medium"),
+    // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+    userCount: bigint("user_count", { mode: "number" }),
+  }
+).as(
+  sql`WITH journey_users AS ( SELECT ju.user_id, ju.purchased_at, ju.purchase_id, ju.coupon, ju.seller_id, ju.seller_name, ju.payment_type, ju.purchase_value, ju.context_ip, ju.purchase_date, ju.origin_count, ju.first_origin, ju.first_source, ju.first_medium, ju.last_origin, ju.last_source, ju.last_medium, ju.origins_with_purchase FROM mv_purchase_journey_users ju ), exploded AS ( SELECT ju.user_id, ju.purchase_id, ju.coupon, ju.seller_id, ju.seller_name, ju.payment_type, ju.purchase_value, ju.context_ip, ju.purchase_date, ju.origin_count, ju.first_origin, ju.first_source, ju.first_medium, ju.last_origin, ju.last_source, ju.last_medium, g.idx AS hop_index, ju.origins_with_purchase[g.idx] AS step_origin, ju.origins_with_purchase[g.idx + 1] AS next_origin, ju.origins_with_purchase[1:g.idx] AS path_prefix, ju.origins_with_purchase[1:g.idx + 1] AS path_with_next FROM journey_users ju CROSS JOIN LATERAL generate_subscripts(ju.origins_with_purchase, 1) g(idx) WHERE g.idx < cardinality(ju.origins_with_purchase) ) SELECT path_prefix, path_with_next, array_to_string(path_prefix, ' > '::text) AS path_prefix_text, array_to_string(path_with_next, ' > '::text) AS path_with_next_text, step_origin, next_origin, hop_index, origin_count, purchase_date, coupon, seller_id, seller_name, payment_type, first_origin, first_source, first_medium, last_origin, last_source, last_medium, count(DISTINCT user_id) AS user_count FROM exploded GROUP BY path_prefix, path_with_next, (array_to_string(path_prefix, ' > '::text)), (array_to_string(path_with_next, ' > '::text)), step_origin, next_origin, hop_index, origin_count, purchase_date, coupon, seller_id, seller_name, payment_type, first_origin, first_source, first_medium, last_origin, last_source, last_medium`
+);
+
+export const mvPurchaseJourneyUsers = pgMaterializedView(
+  "mv_purchase_journey_users",
+  {
+    userId: text("user_id"),
+    purchasedAt: timestamp("purchased_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    purchaseId: varchar("purchase_id", { length: 1024 }),
+    coupon: text(),
+    // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+    sellerId: bigint("seller_id", { mode: "number" }),
+    sellerName: text("seller_name"),
+    paymentType: text("payment_type"),
+    purchaseValue: numeric("purchase_value"),
+    contextIp: text("context_ip"),
+    purchaseDate: date("purchase_date"),
+    origins: text(),
+    originSources: text("origin_sources"),
+    originMediums: text("origin_mediums"),
+    originCount: integer("origin_count"),
+    firstOrigin: text("first_origin"),
+    firstSource: text("first_source"),
+    firstMedium: text("first_medium"),
+    lastOrigin: text("last_origin"),
+    lastSource: text("last_source"),
+    lastMedium: text("last_medium"),
+    originsWithPurchase: text("origins_with_purchase"),
+  }
+).as(
+  sql`WITH journey_window AS ( SELECT f.user_id, f.purchased_at, f.purchase_id, f.coupon, f.seller_id, f.seller_name, f.payment_type, f.purchase_value, f.context_ip, f.purchase_date FROM mv_purchase_first_purchase f ), ordered_events AS ( SELECT j.user_id, e.event_time, e.canonical_origin, e.canonical_source, e.canonical_medium, row_number() OVER (PARTITION BY j.user_id ORDER BY e.event_time, e.page_event_id) AS ordinal_position, lag(e.canonical_origin) OVER (PARTITION BY j.user_id ORDER BY e.event_time, e.page_event_id) AS previous_origin FROM journey_window j JOIN mv_purchase_acquisition_events e ON e.event_user_id = j.user_id AND e.event_time <= j.purchased_at ), deduplicated_events AS ( SELECT oe.user_id, oe.event_time, oe.canonical_origin, oe.canonical_source, oe.canonical_medium FROM ordered_events oe WHERE oe.previous_origin IS DISTINCT FROM oe.canonical_origin OR oe.previous_origin IS NULL ), aggregated AS ( SELECT jw.user_id, jw.purchased_at, jw.purchase_id, jw.coupon, jw.seller_id, jw.seller_name, jw.payment_type, jw.purchase_value, jw.context_ip, jw.purchase_date, COALESCE(array_agg(de.canonical_origin ORDER BY de.event_time), ARRAY['unknown/none'::text]) AS origins, COALESCE(array_agg(de.canonical_source ORDER BY de.event_time), ARRAY['unknown'::text]) AS origin_sources, COALESCE(array_agg(de.canonical_medium ORDER BY de.event_time), ARRAY['none'::text]) AS origin_mediums FROM journey_window jw LEFT JOIN deduplicated_events de ON de.user_id = jw.user_id GROUP BY jw.user_id, jw.purchased_at, jw.purchase_id, jw.coupon, jw.seller_id, jw.seller_name, jw.payment_type, jw.purchase_value, jw.context_ip, jw.purchase_date ) SELECT user_id, purchased_at, purchase_id, coupon, seller_id, seller_name, payment_type, purchase_value, context_ip, purchase_date, origins, origin_sources, origin_mediums, cardinality(origins) AS origin_count, origins[1] AS first_origin, origin_sources[1] AS first_source, origin_mediums[1] AS first_medium, origins[cardinality(origins)] AS last_origin, origin_sources[cardinality(origin_sources)] AS last_source, origin_mediums[cardinality(origin_mediums)] AS last_medium, array_append(origins, 'purchase'::text) AS origins_with_purchase FROM aggregated`
+);
+
+export const iaPurchasesWithChatV3 = pgMaterializedView(
+  "ia_purchases_with_chat_v3",
+  {
+    chatReceivedAt: timestamp("chat_received_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    phone: text(),
+    userId: text("user_id"),
+    purchasedQuotationId: text("purchased_quotation_id"),
+    purchasedAt: timestamp("purchased_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    value: numeric(),
+    coupon: text(),
+    discount: numeric(),
+  }
+).as(
+  sql`WITH new_chats_partition AS ( SELECT n.received_at, n.phone, row_number() OVER (PARTITION BY n.phone ORDER BY n.received_at) AS row_n FROM lia_analytics_prd.user_message n WHERE length(n.phone) <= 13 AND length(n.phone) >= 9 AND (regexp_match(n.phone, '[0-9]+'::text))[1] IS NOT NULL ), new_chats_mapped AS ( SELECT DISTINCT nc.received_at, nc.phone, m.user_id FROM new_chats_partition nc JOIN phone_to_user_mapping_v3 m ON m.phone = nc.phone WHERE nc.row_n = 1 ), eligible_purchases AS ( SELECT DISTINCT nc.received_at AS chat_received_at, nc.phone, nc.user_id, p.quotation_id AS purchased_quotation_id, p.received_at AS purchased_at, p.value, (regexp_match(p.coupon, '(.+)_.+'::text))[1] AS coupon, p.discount FROM new_chats_mapped nc LEFT JOIN api_sap_prd.purchased p ON nc.user_id = p.user_id WHERE p.received_at >= (nc.received_at - '14 days'::interval) ) SELECT chat_received_at, phone, user_id, purchased_quotation_id, purchased_at, value, coupon, discount FROM eligible_purchases`
+);
+
+export const phoneToUserMappingV3 = pgMaterializedView(
+  "phone_to_user_mapping_v3",
+  { phone: text(), userId: text("user_id") }
+).as(
+  sql`WITH sliced_leads AS ( SELECT l_1.phone, l_1.user_id FROM js_aquisicao_prd.lead l_1 WHERE l_1.received_at > '2025-07-01 00:00:00+00'::timestamp with time zone ORDER BY l_1.received_at DESC ), quot_gen AS ( SELECT q_1.user_id, q_1.phone FROM lia_analytics_prd.generate_quotation_success q_1 ORDER BY q_1.received_at DESC ) SELECT DISTINCT COALESCE(concat('55', l.phone), q.phone) AS phone, COALESCE(l.user_id, q.user_id) AS user_id FROM lia_analytics_prd.user_message um LEFT JOIN sliced_leads l ON um.phone = concat('55', l.phone) LEFT JOIN quot_gen q ON um.phone = q.phone`
+);
+
+export const phoneToUserMappingV2 = pgMaterializedView(
+  "phone_to_user_mapping_v2",
+  { phone: text(), userId: text("user_id") }
+).as(
+  sql`WITH sliced_leads AS ( SELECT l_1.phone, l_1.user_id FROM js_aquisicao_prd.lead l_1 WHERE l_1.received_at > '2025-07-01 00:00:00+00'::timestamp with time zone ORDER BY l_1.received_at DESC ), quot_gen AS ( SELECT q_1.user_id, q_1.phone FROM lia_analytics_prd.generate_quotation_success q_1 ORDER BY q_1.received_at DESC ) SELECT DISTINCT COALESCE(l.phone, q.phone) AS phone, COALESCE(l.user_id, q.user_id) AS user_id FROM lia_analytics_prd.user_message um LEFT JOIN sliced_leads l ON um.phone = concat('55', l.phone) LEFT JOIN quot_gen q ON um.phone = q.phone`
+);
+
+export const phoneToUserMapping = pgMaterializedView("phone_to_user_mapping", {
+  leadPhone: text("lead_phone"),
+  userId: text("user_id"),
+  phone: text(),
+}).as(
+  sql`WITH sliced_leads AS ( SELECT l_1.phone, l_1.user_id FROM js_aquisicao_prd.lead l_1 WHERE l_1.received_at > '2025-05-05 00:00:00+00'::timestamp with time zone ORDER BY l_1.received_at DESC ) SELECT DISTINCT l.phone AS lead_phone, l.user_id, gs.phone FROM sliced_leads l JOIN lia_analytics_prd.user_message gs ON concat('55', l.phone) = gs.phone WHERE l.phone IS NOT NULL AND l.user_id IS NOT NULL`
+);
+
+export const iaPurchasesWithChatV2 = pgMaterializedView(
+  "ia_purchases_with_chat_v2",
+  {
+    chatReceivedAt: timestamp("chat_received_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    phone: text(),
+    userId: text("user_id"),
+    purchasedQuotationId: text("purchased_quotation_id"),
+    purchasedAt: timestamp("purchased_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    value: numeric(),
+    coupon: text(),
+    discount: numeric(),
+  }
+).as(
+  sql`WITH new_chats_partition AS ( SELECT n.received_at, n.phone, row_number() OVER (PARTITION BY n.phone ORDER BY n.received_at) AS row_n FROM lia_analytics_prd.user_message n WHERE length(n.phone) <= 13 AND length(n.phone) >= 9 AND (regexp_match(n.phone, '[0-9]+'::text))[1] IS NOT NULL ), new_chats_mapped AS ( SELECT DISTINCT nc.received_at, nc.phone, m.user_id FROM new_chats_partition nc JOIN phone_to_user_mapping_v2 m ON m.phone = nc.phone WHERE nc.row_n = 1 ), eligible_purchases AS ( SELECT DISTINCT nc.received_at AS chat_received_at, nc.phone, nc.user_id, p.quotation_id AS purchased_quotation_id, p.received_at AS purchased_at, p.value, (regexp_match(p.coupon, '(.+)_.+'::text))[1] AS coupon, p.discount FROM new_chats_mapped nc LEFT JOIN api_sap_prd.purchased p ON nc.user_id = p.user_id WHERE p.received_at >= (nc.received_at - '14 days'::interval) ) SELECT chat_received_at, phone, user_id, purchased_quotation_id, purchased_at, value, coupon, discount FROM eligible_purchases`
+);
+
+export const iaPurchasesWithChat = pgMaterializedView(
+  "ia_purchases_with_chat",
+  {
+    chatReceivedAt: timestamp("chat_received_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    phone: text(),
+    userId: text("user_id"),
+    purchasedQuotationId: text("purchased_quotation_id"),
+    purchasedAt: timestamp("purchased_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    value: numeric(),
+    coupon: text(),
+    discount: numeric(),
+  }
+).as(
+  sql`WITH new_chats_partition AS ( SELECT n.received_at, n.phone, row_number() OVER (PARTITION BY n.phone ORDER BY n.received_at) AS row_n FROM lia_analytics_prd.user_message n WHERE length(n.phone) <= 13 AND length(n.phone) >= 9 AND (regexp_match(n.phone, '[0-9]+'::text))[1] IS NOT NULL ), new_chats_mapped AS ( SELECT DISTINCT nc.received_at, nc.phone, m.user_id FROM new_chats_partition nc JOIN phone_to_user_mapping m ON m.phone = nc.phone WHERE nc.row_n = 1 ), eligible_purchases AS ( SELECT DISTINCT nc.received_at AS chat_received_at, nc.phone, nc.user_id, p.quotation_id AS purchased_quotation_id, p.received_at AS purchased_at, p.value, (regexp_match(p.coupon, '(.+)_.+'::text))[1] AS coupon, p.discount FROM new_chats_mapped nc LEFT JOIN api_sap_prd.purchased p ON nc.user_id = p.user_id WHERE p.received_at >= (nc.received_at - '14 days'::interval) ) SELECT chat_received_at, phone, user_id, purchased_quotation_id, purchased_at, value, coupon, discount FROM eligible_purchases`
+);
+
+export const matPurchasesPageviews = pgMaterializedView(
+  "mat_purchases_pageviews",
+  {
+    anonId: text("anon_id"),
+    pageviewDate: timestamp("pageview_date", { mode: "string" }),
+    userId: text("user_id"),
+    purchaseDate: timestamp("purchase_date", { mode: "string" }),
+    quotationId: text("quotation_id"),
+    coupon: text(),
+    // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+    sellerId: bigint("seller_id", { mode: "number" }),
+    utmSource: text("utm_source"),
+    utmMedium: text("utm_medium"),
+    utmContent: text("utm_content"),
+    campaignName: text("campaign_name"),
+    adName: text("ad_name"),
+    adNameGroup: text("ad_name_group"),
+    adNameCamp: text("ad_name_camp"),
+    pageUrl: text("page_url"),
+    pagePath: text("page_path"),
+    referrer: text(),
+    // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+    pageviewOrder: bigint("pageview_order", { mode: "number" }),
+  }
+).as(
+  sql`WITH user_anonymous_mapping AS ( SELECT DISTINCT pages.user_id, pages.anonymous_id FROM js_aquisicao_prd.pages WHERE pages.user_id IS NOT NULL AND (pages.received_at AT TIME ZONE 'America/Sao_Paulo'::text) > ((now() AT TIME ZONE 'America/Sao_Paulo'::text) - '90 days'::interval) ), purchases AS ( SELECT p_1.user_id, uam.anonymous_id, (p_1.received_at AT TIME ZONE 'America/Sao_Paulo'::text) AS purchase_date, p_1.quotation_id, p_1.coupon, p_1.seller_id FROM api_sap_prd.purchased p_1 LEFT JOIN user_anonymous_mapping uam ON p_1.user_id = uam.user_id WHERE (p_1.received_at AT TIME ZONE 'America/Sao_Paulo'::text) > ((now() AT TIME ZONE 'America/Sao_Paulo'::text) - '90 days'::interval) ), purchases_with_pageviews AS ( SELECT pv.anonymous_id AS anon_id, (pv.received_at AT TIME ZONE 'America/Sao_Paulo'::text) AS pageview_date, p_1.user_id, p_1.anonymous_id, p_1.purchase_date, p_1.quotation_id, p_1.coupon, p_1.seller_id, pv.context_campaign_source AS utm_source, pv.context_campaign_medium AS utm_medium, pv.context_campaign_content AS utm_content, pv.context_campaign_name AS campaign_name, pv.context_page_url AS page_url, pv.context_page_referrer AS referrer, pv.path AS page_path, (regexp_match(pv.context_campaign_name, '.+\|.+\|(.+)'::text))[1] AS ad_name, (regexp_match(pv.context_campaign_name, '.+\|.+\|([a-zA-Z]+[0-9]+)'::text))[1] AS ad_name_group, (regexp_match(pv.context_campaign_name, '.+\|.+\|([a-zA-Z]+)[0-9]+'::text))[1] AS ad_name_camp FROM js_aquisicao_prd.pages pv JOIN purchases p_1 ON pv.anonymous_id = p_1.anonymous_id WHERE (pv.received_at AT TIME ZONE 'America/Sao_Paulo'::text) > ((now() AT TIME ZONE 'America/Sao_Paulo'::text) - '90 days'::interval) ) SELECT anon_id, pageview_date, user_id, purchase_date, quotation_id, CASE WHEN coupon ~ similar_to_escape('[0-9]{1}[A-Z0-9]{3}'::text) OR coupon ~ similar_to_escape('[A-Z]{1}[0-9]{1}[A-Z0-9]{2}'::text) THEN 'INDICACAO'::text ELSE (regexp_match(coupon, '(.+)_.+'::text))[1] END AS coupon, seller_id, CASE WHEN utm_source IS NULL AND utm_medium IS NULL AND referrer IS NOT NULL AND referrer !~ similar_to_escape('%loovi.com.br%'::text) THEN CASE WHEN referrer ~~ '%google%'::text THEN 'google'::text WHEN referrer ~~ '%bing%'::text THEN 'bing'::text WHEN referrer ~~ '%instagram%'::text THEN 'instagram'::text WHEN referrer ~~ '%meta%'::text THEN 'meta'::text WHEN referrer ~~ '%facebook%'::text THEN 'meta'::text WHEN referrer ~~ '%tiktok%'::text THEN 'tiktok'::text ELSE 'other'::text END WHEN referrer ~ similar_to_escape('%loovi.com.br%'::text) THEN 'direct'::text ELSE utm_source END AS utm_source, CASE WHEN utm_source IS NULL AND utm_medium IS NULL AND referrer IS NOT NULL AND referrer !~ similar_to_escape('%loovi.com.br%'::text) THEN 'organic'::text WHEN referrer ~ similar_to_escape('%loovi.com.br%'::text) THEN 'direct'::text ELSE utm_medium END AS utm_medium, utm_content, campaign_name, ad_name, ad_name_group, ad_name_camp, page_url, page_path, referrer, row_number() OVER (PARTITION BY anon_id ORDER BY pageview_date) AS pageview_order FROM purchases_with_pageviews p ORDER BY anon_id, pageview_date`
+);
+
+export const purchases = pgMaterializedView("purchases", {
+  receivedAt: timestamp("received_at", { mode: "string" }),
+  quotationId: text("quotation_id"),
+  value: numeric(),
+  coupon: text(),
+  userId: text("user_id"),
+  // You can use { mode: "bigint" } if numbers are exceeding js number limitations
+  sellerId: bigint("seller_id", { mode: "number" }),
+  sellerName: text("seller_name"),
+  liaTouch: integer("lia_touch"),
+  executiveTouch: integer("executive_touch"),
+  insideTouch: integer("inside_touch"),
+  firstQuotationBy: text("first_quotation_by"),
+  firstQuotationDate: date("first_quotation_date"),
+}).as(
+  sql`WITH purchases AS ( SELECT (purchased.received_at AT TIME ZONE 'America/Sao_Paulo'::text) AS received_at, purchased.quotation_id, purchased.value, CASE WHEN purchased.coupon ~ similar_to_escape('[0-9]{1}[A-Z0-9]{3}'::text) OR purchased.coupon ~ similar_to_escape('[A-Z]{1}[0-9]{1}[A-Z0-9]{2}'::text) THEN 'INDICACAO'::text ELSE (regexp_match(purchased.coupon, '(.+)_.+'::text))[1] END AS coupon, purchased.user_id, purchased.seller_id, CASE WHEN purchased.seller_id = ANY (ARRAY[16::bigint, 19::bigint]) THEN 'LIA'::text WHEN purchased.seller_id = ANY (ARRAY[47197::bigint, 47195::bigint, 47218::bigint, 47854::bigint, 47211::bigint, 47250::bigint, 47849::bigint, 47385::bigint, 47200::bigint, 47192::bigint, 47205::bigint, 47850::bigint, 47223::bigint, 47165::bigint, 47374::bigint, 47368::bigint, 47194::bigint, 47206::bigint, 47236::bigint, 43925::bigint, 47225::bigint, 47388::bigint, 47202::bigint, 47393::bigint, 47199::bigint, 47193::bigint, 47162::bigint, 47198::bigint, 47259::bigint, 47378::bigint, 47262::bigint, 47185::bigint, 47365::bigint, 47163::bigint, 47853::bigint, 47381::bigint, 47164::bigint, 47190::bigint, 47203::bigint, 43926::bigint, 47851::bigint, 49444::bigint, 49442::bigint, 49443::bigint, 49445::bigint, 49476::bigint, 49525::bigint, 49524::bigint, 49815::bigint, 49816::bigint, 49817::bigint, 49818::bigint, 49861::bigint]) THEN 'INSIDE'::text ELSE 'Executivo'::text END AS seller_name FROM api_sap_prd.purchased ), touches AS ( SELECT p_1.user_id, max( CASE WHEN q.seller_id = ANY (ARRAY[16::bigint, 19::bigint]) THEN 1 ELSE 0 END) AS lia_touch, max( CASE WHEN q.seller_id <> ALL (ARRAY[16::bigint, 19::bigint, 47197::bigint, 47195::bigint, 47218::bigint, 47854::bigint, 47211::bigint, 47250::bigint, 47849::bigint, 47385::bigint, 47200::bigint, 47192::bigint, 47205::bigint, 47850::bigint, 47223::bigint, 47165::bigint, 47374::bigint, 47368::bigint, 47194::bigint, 47206::bigint, 47236::bigint, 43925::bigint, 47225::bigint, 47388::bigint, 47202::bigint, 47393::bigint, 47199::bigint, 47193::bigint, 47162::bigint, 47198::bigint, 47259::bigint, 47378::bigint, 47262::bigint, 47185::bigint, 47365::bigint, 47163::bigint, 47853::bigint, 47381::bigint, 47164::bigint, 47190::bigint, 47203::bigint, 43926::bigint, 47851::bigint, 49444::bigint, 49442::bigint, 49443::bigint, 49445::bigint, 49476::bigint, 49525::bigint, 49524::bigint, 49815::bigint, 49816::bigint, 49817::bigint, 49818::bigint, 49861::bigint]) THEN 1 ELSE 0 END) AS executive_touch, max( CASE WHEN q.seller_id = ANY (ARRAY[47197::bigint, 47195::bigint, 47218::bigint, 47854::bigint, 47211::bigint, 47250::bigint, 47849::bigint, 47385::bigint, 47200::bigint, 47192::bigint, 47205::bigint, 47850::bigint, 47223::bigint, 47165::bigint, 47374::bigint, 47368::bigint, 47194::bigint, 47206::bigint, 47236::bigint, 43925::bigint, 47225::bigint, 47388::bigint, 47202::bigint, 47393::bigint, 47199::bigint, 47193::bigint, 47162::bigint, 47198::bigint, 47259::bigint, 47378::bigint, 47262::bigint, 47185::bigint, 47365::bigint, 47163::bigint, 47853::bigint, 47381::bigint, 47164::bigint, 47190::bigint, 47203::bigint, 43926::bigint, 47851::bigint, 49444::bigint, 49442::bigint, 49443::bigint, 49445::bigint, 49476::bigint, 49525::bigint, 49524::bigint, 49815::bigint, 49816::bigint, 49817::bigint, 49818::bigint, 49861::bigint]) THEN 1 ELSE 0 END) AS inside_touch FROM purchases p_1 JOIN api_sap_prd.quotation_generated q ON p_1.user_id = q.user_id GROUP BY p_1.user_id ), first_quot AS ( SELECT p_1.user_id, date(quot_ordered.received_at) AS first_quotation_date, CASE WHEN quot_ordered.seller_id = ANY (ARRAY[16::bigint, 19::bigint]) THEN 'LIA'::text WHEN quot_ordered.seller_id = ANY (ARRAY[47197::bigint, 47195::bigint, 47218::bigint, 47854::bigint, 47211::bigint, 47250::bigint, 47849::bigint, 47385::bigint, 47200::bigint, 47192::bigint, 47205::bigint, 47850::bigint, 47223::bigint, 47165::bigint, 47374::bigint, 47368::bigint, 47194::bigint, 47206::bigint, 47236::bigint, 43925::bigint, 47225::bigint, 47388::bigint, 47202::bigint, 47393::bigint, 47199::bigint, 47193::bigint, 47162::bigint, 47198::bigint, 47259::bigint, 47378::bigint, 47262::bigint, 47185::bigint, 47365::bigint, 47163::bigint, 47853::bigint, 47381::bigint, 47164::bigint, 47190::bigint, 47203::bigint, 43926::bigint, 47851::bigint, 49444::bigint, 49442::bigint, 49443::bigint, 49445::bigint, 49476::bigint, 49525::bigint, 49524::bigint, 49815::bigint, 49816::bigint, 49817::bigint, 49818::bigint, 49861::bigint]) THEN 'INSIDE'::text ELSE 'Executivo'::text END AS first_quotation_by FROM purchases p_1 JOIN ( SELECT quotation_generated.id, quotation_generated.received_at, quotation_generated.context_library_version, quotation_generated.event, quotation_generated.original_timestamp, quotation_generated.sent_at, quotation_generated."timestamp", quotation_generated.user_id, quotation_generated.context_library_name, quotation_generated.event_text, quotation_generated.quotation_id, quotation_generated.uuid_ts, quotation_generated.seller_id, row_number() OVER (PARTITION BY quotation_generated.user_id ORDER BY quotation_generated.received_at) AS quot_order FROM api_sap_prd.quotation_generated) quot_ordered ON p_1.user_id = quot_ordered.user_id WHERE quot_ordered.quot_order = 1 GROUP BY p_1.user_id, (date(quot_ordered.received_at)), ( CASE WHEN quot_ordered.seller_id = ANY (ARRAY[16::bigint, 19::bigint]) THEN 'LIA'::text WHEN quot_ordered.seller_id = ANY (ARRAY[47197::bigint, 47195::bigint, 47218::bigint, 47854::bigint, 47211::bigint, 47250::bigint, 47849::bigint, 47385::bigint, 47200::bigint, 47192::bigint, 47205::bigint, 47850::bigint, 47223::bigint, 47165::bigint, 47374::bigint, 47368::bigint, 47194::bigint, 47206::bigint, 47236::bigint, 43925::bigint, 47225::bigint, 47388::bigint, 47202::bigint, 47393::bigint, 47199::bigint, 47193::bigint, 47162::bigint, 47198::bigint, 47259::bigint, 47378::bigint, 47262::bigint, 47185::bigint, 47365::bigint, 47163::bigint, 47853::bigint, 47381::bigint, 47164::bigint, 47190::bigint, 47203::bigint, 43926::bigint, 47851::bigint, 49444::bigint, 49442::bigint, 49443::bigint, 49445::bigint, 49476::bigint, 49525::bigint, 49524::bigint, 49815::bigint, 49816::bigint, 49817::bigint, 49818::bigint, 49861::bigint]) THEN 'INSIDE'::text ELSE 'Executivo'::text END) ) SELECT p.received_at, p.quotation_id, p.value, p.coupon, p.user_id, p.seller_id, p.seller_name, t.lia_touch, t.executive_touch, t.inside_touch, fq.first_quotation_by, fq.first_quotation_date FROM purchases p LEFT JOIN touches t ON p.user_id = t.user_id LEFT JOIN first_quot fq ON p.user_id = fq.user_id`
+);
+
+export const funnelEvents = pgMaterializedView("funnel_events", {
+  userKey: text("user_key"),
+  stepOrder: integer("step_order"),
+  stepName: text("step_name"),
+  eventTime: timestamp("event_time", { withTimezone: true, mode: "string" }),
+  eventId: varchar("event_id", { length: 1024 }),
+}).as(
+  sql`SELECT COALESCE(e.user_id, ib.resolved_user_id, e.anonymous_id) AS user_key, e.step_order, e.step_name, e.event_time, e.event_id FROM ( SELECT pages.id AS event_id, pages.received_at AS event_time, pages.user_id, pages.anonymous_id, 1 AS step_order, 'pages'::text AS step_name FROM js_aquisicao_prd.pages UNION ALL SELECT lead.id, lead.received_at, lead.user_id, lead.anonymous_id, 2, 'lead'::text FROM js_aquisicao_prd.lead UNION ALL SELECT lead_vehicle.id, lead_vehicle.received_at, lead_vehicle.user_id, lead_vehicle.anonymous_id, 3, 'lead_vehicle'::text FROM js_aquisicao_prd.lead_vehicle UNION ALL SELECT lead_address.id, lead_address.received_at, lead_address.user_id, lead_address.anonymous_id, 4, 'lead_address'::text FROM js_aquisicao_prd.lead_address UNION ALL SELECT quotation_viewed.id, quotation_viewed.received_at, quotation_viewed.user_id, quotation_viewed.anonymous_id, 5, 'quotation_viewed'::text FROM js_aquisicao_prd.quotation_viewed UNION ALL SELECT payment_info_added.id, payment_info_added.received_at, payment_info_added.user_id, payment_info_added.anonymous_id, 6, 'payment_info_added'::text FROM js_aquisicao_prd.payment_info_added UNION ALL SELECT purchased.id, purchased.received_at, purchased.user_id, NULL::text AS anonymous_id, 7, 'purchased'::text FROM api_sap_prd.purchased) e LEFT JOIN identity_bridge ib ON e.anonymous_id = ib.anonymous_id WHERE COALESCE(e.user_id, ib.resolved_user_id, e.anonymous_id) IS NOT NULL`
+);
+
+export const identityBridge = pgMaterializedView("identity_bridge", {
+  anonymousId: text("anonymous_id"),
+  resolvedUserId: text("resolved_user_id"),
+}).as(
+  sql`WITH pairs AS ( SELECT lead.anonymous_id, lead.user_id FROM js_aquisicao_prd.lead UNION ALL SELECT lead_address.anonymous_id, lead_address.user_id FROM js_aquisicao_prd.lead_address UNION ALL SELECT lead_vehicle.anonymous_id, lead_vehicle.user_id FROM js_aquisicao_prd.lead_vehicle UNION ALL SELECT payment_info_added.anonymous_id, payment_info_added.user_id FROM js_aquisicao_prd.payment_info_added UNION ALL SELECT pages.anonymous_id, pages.user_id FROM js_aquisicao_prd.pages UNION ALL SELECT quotation_viewed.anonymous_id, quotation_viewed.user_id FROM js_aquisicao_prd.quotation_viewed ) SELECT anonymous_id, min(user_id) AS resolved_user_id FROM pairs WHERE anonymous_id IS NOT NULL AND user_id IS NOT NULL GROUP BY anonymous_id`
+);
