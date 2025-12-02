@@ -74,7 +74,7 @@ const serverlessConfiguration: AWS = {
         CHECK_RESPONSE_SCHEDULE: "rate(365 days)",
         GALLABOX_WEBHOOK_URL:
           "https://server.gallabox.com/accounts/67af9a1e292376becc59c4ce/integrations/genericWebhook/67f58b4bf1db6ba0b795991c/webhook",
-        GALLABOX_API_KEY: "67fe697efe88a376967a7f95",
+        GALLABOX_API_KEY: "${param:GALLABOX_API_KEY}",
         GALLABOX_API_SECRET: "${self:custom.ssmKeys.GALLABOX_API_SECRET}",
         GALLABOX_ACCOUNT_ID: "67af9a1e292376becc59c4ce",
         GALLABOX_IA_WEBHOOK_URL:
@@ -100,7 +100,7 @@ const serverlessConfiguration: AWS = {
         CHECK_RESPONSE_SCHEDULE: "rate(365 days)",
         GALLABOX_WEBHOOK_URL:
           "https://server.gallabox.com/accounts/67af9a1e292376becc59c4ce/integrations/genericWebhook/67f58b4bf1db6ba0b795991c/webhook",
-        GALLABOX_API_KEY: "67fe697efe88a376967a7f95",
+        GALLABOX_API_KEY: "${param:GALLABOX_API_KEY}",
         GALLABOX_API_SECRET: "${self:custom.ssmKeys.GALLABOX_API_SECRET}",
         GALLABOX_ACCOUNT_ID: "67af9a1e292376becc59c4ce",
         GALLABOX_IA_WEBHOOK_URL:
@@ -126,7 +126,7 @@ const serverlessConfiguration: AWS = {
         CHECK_RESPONSE_SCHEDULE: "rate(10 minutes)",
         GALLABOX_WEBHOOK_URL:
           "https://server.gallabox.com/accounts/67af9a1e292376becc59c4ce/integrations/genericWebhook/67f6df58c6f6556a7c6b1d83/webhook",
-        GALLABOX_API_KEY: "67fe697efe88a376967a7f95",
+        GALLABOX_API_KEY: "${param:GALLABOX_API_KEY}",
         GALLABOX_API_SECRET: "${self:custom.ssmKeys.GALLABOX_API_SECRET}",
         GALLABOX_ACCOUNT_ID: "67af9a1e292376becc59c4ce",
         GALLABOX_IA_WEBHOOK_URL:
